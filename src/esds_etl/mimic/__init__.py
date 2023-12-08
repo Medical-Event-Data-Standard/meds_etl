@@ -438,17 +438,25 @@ def main():
 
         grouped_by_patient = grouped_by_time.groupby("patient_id").agg(events=event.sort_by(pl.col("time")))
 
-        # Save and load our data in order to convert to pyarrow
+        # We now have our data in the final form, grouped_by_patient, but we have to do one final transformation
+        # We have to convert from polar's large_list to list because large_list is not supported by huggingface
+
+        # We do this conversion using the pyarrow library
+
+        # Save and load our data in order to convert to pyarrow library
         with tempfile.NamedTemporaryFile() as temp_file:
             grouped_by_patient.collect().write_parquet(temp_file.name, compression="uncompressed")
             load_back = pq.read_table(temp_file.name)
 
+        # Now we need to reconstruct the schema
+        # We do this by pulling the metadata schema and then using esds.patient_schema
         event_schema = load_back.schema.field("events").type.value_type
         measurement_schema = event_schema.field("measurements").type.value_type
         metadata_schema = measurement_schema.field("metadata").type
 
-        # We want an ESDS schema with the specified metadata
         desired_schema = esds.patient_schema(metadata_schema)
+
+        # All the larg_lists are now converted to lists, so we are good to load with huggingface
         casted = load_back.cast(desired_schema)
 
         pq.write_table(casted, os.path.join(data_dir, f"data_{shard_index}.parquet"))
