@@ -1,23 +1,38 @@
 import argparse
+import json
 import os
+import shutil
+import subprocess
+import tempfile
+from importlib.resources import files
 
 import esds
+import jsonschema
 import polars as pl
 import pyarrow.parquet as pq
+
+import esds_etl
+
+MIMIC_VERSION = "2.2"
 
 
 def main():
     parser = argparse.ArgumentParser(prog="esds_etl_mimic", description="Performs an ETL from MIMIC_IV to ESDS")
     parser.add_argument("src_mimic", type=str)
     parser.add_argument("destination", type=str)
+    parser.add_argument("--num_shards", type=int, default=100)
     args = parser.parse_args()
 
     os.makedirs(args.destination, exist_ok=True)
 
+    data_dir = os.path.join(args.destination, "data")
+
+    os.makedirs(data_dir, exist_ok=True)
+
     if not os.path.exists(args.src_mimic):
         raise ValueError(f'The source MIMIC_IV folder ("{args.src_mimic}") does not seem to exist?')
 
-    src_mimic_version = os.path.join(args.src_mimic, "2.2")
+    src_mimic_version = os.path.join(args.src_mimic, MIMIC_VERSION)
 
     if not os.path.exists(src_mimic_version):
         raise ValueError(f'The source MIMIC_IV folder does not contain a version 2.2 subfolder ("{src_mimic_version}")')
@@ -38,7 +53,7 @@ def main():
             },
         },
         "icu/inputevents": {
-            "code": "MIMIC_IV_ITEM/" + pl.col("itemid"),
+            "code": "MIMIC_IV_ITEM/" + pl.col("itemid") + "/" + pl.col("ordercategorydescription"),
             "time": pl.col("storetime"),
             "value": pl.col("rate"),
             "metadata": {
@@ -249,6 +264,7 @@ def main():
                 "route": pl.col("route"),
                 "unit": pl.col("dose_unit_rx"),
             },
+            "possibly_null_time": True,
         },
         "hosp/procedures_icd": {
             "code": "ICD" + pl.col("icd_version") + "CM/" + pl.col("icd_code"),
@@ -283,17 +299,40 @@ def main():
         os.path.join(src_mimic_version, "hosp", "admissions" + ".csv.gz"), infer_schema_length=0
     ).lazy()
 
+    temp_dir = os.path.join(args.destination, "temp")
+
+    if os.path.exists(temp_dir):
+        shutil.rmtree(temp_dir)
+
+    os.mkdir(temp_dir)
+
+    for shard_index in range(args.num_shards):
+        os.mkdir(os.path.join(temp_dir, str(shard_index)))
+
+    print("Processing tables into " + temp_dir)
+
     for table_name, mapping_codes in all_tables.items():
+        # if 'prescription' not in table_name:
+        #    continue
+        print("Processing", table_name)
         if mapping_codes is None:
             continue
+
+        uncompressed_path = os.path.join(src_mimic_version, table_name + ".csv")
+        compressed_path = os.path.join(src_mimic_version, table_name + ".csv.gz")
+
+        if not os.path.exists(uncompressed_path):
+            subprocess.run(["gunzip", "-k", compressed_path])
 
         if not isinstance(mapping_codes, list):
             mapping_codes = [mapping_codes]
 
         for mapping_code in mapping_codes:
-            table_csv = pl.read_csv(
-                os.path.join(src_mimic_version, table_name + ".csv.gz"), infer_schema_length=0
-            ).lazy()
+            reader = pl.read_csv_batched(
+                uncompressed_path,
+                infer_schema_length=0,
+                batch_size=10_000_000,
+            )
 
             patient_id = pl.col("subject_id").cast(pl.Int64)
             time = mapping_code["time"]
@@ -326,70 +365,161 @@ def main():
 
             metadata = transform_metadata(mapping_code["metadata"])
 
-            if mapping_code.get("requires_admission_join", False):
-                table_csv = table_csv.join(admission_table, on="hadm_id")
+            batch_index = 0
+            while True:
+                batch_index += 1
+                table_csv = reader.next_batches(1)
+                if table_csv is None:
+                    break
 
-            if mapping_code.get("possibly_null_code", False):
-                table_csv = table_csv.filter(code != pl.lit(None))
+                table_csv = table_csv[0].lazy()
 
-            if mapping_code.get("possibly_null_time", False):
-                table_csv = table_csv.filter(time != pl.lit(None))
+                if mapping_code.get("requires_admission_join", False):
+                    table_csv = table_csv.join(admission_table, on="hadm_id")
 
-            events.append(
-                table_csv.select(
-                    patient_id=patient_id,
-                    time=time,
-                    code=code,
-                    text_value=text_value,
-                    numeric_value=numeric_value,
-                    datetime_value=datetime_value,
-                    metadata=metadata,
+                if mapping_code.get("possibly_null_code", False):
+                    table_csv = table_csv.filter(code != pl.lit(None))
+
+                if mapping_code.get("possibly_null_time", False):
+                    table_csv = table_csv.filter(time != pl.lit(None))
+
+                event_data = (
+                    table_csv.select(
+                        patient_id=patient_id,
+                        time=time,
+                        code=code,
+                        text_value=text_value,
+                        numeric_value=numeric_value,
+                        datetime_value=datetime_value,
+                        metadata=metadata,
+                        shard=patient_id.hash(213345) % args.num_shards,
+                    )
+                    .collect()
+                    .partition_by("shard", as_dict=True, maintain_order=False)
                 )
+
+                for shard_index, shard in event_data.items():
+                    fname = os.path.join(
+                        temp_dir, str(shard_index), f'{table_name.replace("/", "_")}_{batch_index}.parquet'
+                    )
+                    shard.write_parquet(fname, compression="uncompressed")
+
+    print("Processing each shard")
+    for shard_index in range(args.num_shards):
+        print("Processing shard ", shard_index)
+        shard_dir = os.path.join(temp_dir, str(shard_index))
+
+        events = [pl.scan_parquet(os.path.join(shard_dir, a)) for a in os.listdir(shard_dir)]
+
+        all_events = pl.concat(events, how="diagonal_relaxed")
+
+        for important_column in ("patient_id", "time", "code"):
+            rows_with_invalid_code = all_events.filter(pl.col(important_column).is_null()).collect()
+            if len(rows_with_invalid_code) != 0:
+                print("Have rows with invalid " + important_column)
+                for row in rows_with_invalid_code:
+                    print(row)
+                raise ValueError("Cannot have rows with invalid " + important_column)
+
+        measurement = pl.struct(
+            code=pl.col("code"),
+            text_value=pl.col("text_value"),
+            numeric_value=pl.col("numeric_value"),
+            datetime_value=pl.col("datetime_value"),
+            metadata=pl.col("metadata"),
+        )
+
+        grouped_by_time = all_events.groupby("patient_id", "time").agg(measurements=measurement)
+
+        event = pl.struct(
+            pl.col("time"),
+            pl.col("measurements"),
+        )
+
+        grouped_by_patient = grouped_by_time.groupby("patient_id").agg(events=event.sort_by(pl.col("time")))
+
+        # Save and load our data in order to convert to pyarrow
+        with tempfile.NamedTemporaryFile() as temp_file:
+            grouped_by_patient.collect().write_parquet(temp_file.name, compression="uncompressed")
+            load_back = pq.read_table(temp_file.name)
+
+        event_schema = load_back.schema.field("events").type.value_type
+        measurement_schema = event_schema.field("measurements").type.value_type
+        metadata_schema = measurement_schema.field("metadata").type
+
+        # We want an ESDS schema with the specified metadata
+        desired_schema = esds.patient_schema(metadata_schema)
+        casted = load_back.cast(desired_schema)
+
+        pq.write_table(casted, os.path.join(data_dir, f"data_{shard_index}.parquet"))
+
+    shutil.rmtree(temp_dir)
+
+    code_metadata = {}
+
+    code_metadata_files = {
+        "d_labitems_to_loinc": {
+            "code": "MIMIC_IV_LABITEM/" + pl.col("itemid (omop_source_code)"),
+            "descr": pl.col("label"),
+            "parent": pl.col("omop_vocabulary_id") + "/" + pl.col("omop_concept_code"),
+        },
+        "inputevents_to_rxnorm": {
+            "code": "MIMIC_IV_ITEM/" + pl.col("itemid (omop_source_code)") + "/" + pl.col("ordercategorydescription"),
+            "descr": pl.col("label"),
+            "parent": pl.col("omop_vocabulary_id") + "/" + pl.col("omop_concept_code"),
+        },
+        "meas_chartevents_main": {
+            "code": "MIMIC_IV_ITEM/" + pl.col("itemid (omop_source_code)"),
+            "descr": pl.col("label"),
+            "parent": pl.col("omop_vocabulary_id") + "/" + pl.col("omop_concept_code"),
+        },
+        "outputevents_to_loinc": {
+            "code": "MIMIC_IV_ITEM/" + pl.col("itemid (omop_source_code)"),
+            "descr": pl.col("label"),
+            "parent": pl.col("omop_vocabulary_id") + "/" + pl.col("omop_concept_code"),
+        },
+        "proc_datetimeevents": {
+            "code": "MIMIC_IV_ITEM/" + pl.col("itemid (omop_source_code)"),
+            "descr": pl.col("label"),
+            "parent": pl.col("omop_vocabulary_id") + "/" + pl.col("omop_concept_code"),
+        },
+        "proc_itemid": {
+            "code": "MIMIC_IV_ITEM/" + pl.col("itemid (omop_source_code)"),
+            "descr": pl.col("label"),
+            "parent": pl.col("omop_vocabulary_id") + "/" + pl.col("omop_concept_code"),
+        },
+    }
+
+    for fname, mapping_info in code_metadata_files.items():
+        with files("esds_etl.mimic.concept_map").joinpath(fname + ".csv").open("rb") as f:
+            table = pl.read_csv(f, infer_schema_length=0)
+            code_and_value = table.select(
+                code=mapping_info["code"], descr=mapping_info["descr"], parent=mapping_info["parent"]
             )
+            for code, descr, value in code_and_value.iter_rows():
+                if code in code_metadata:
+                    assert (
+                        value == code_metadata[code].get("parent_codes", [None])[0]
+                    ), f"{code} {descr} {value} {code_metadata[code]}"
+                result = {}
 
-    all_events = pl.concat(events, how="diagonal_relaxed").collect().lazy()
+                if descr is not None:
+                    result["description"] = descr
 
-    for important_column in ("patient_id", "time", "code"):
-        rows_with_invalid_code = all_events.filter(pl.col(important_column).is_null()).collect()
-        if len(rows_with_invalid_code) != 0:
-            print("Have rows with invalid " + important_column)
-            for row in rows_with_invalid_code:
-                print(row)
-            raise ValueError("Cannot have rows with invalid " + important_column)
+                if value is not None:
+                    result["parent_codes"] = [value]
 
-    measurement = pl.struct(
-        code=pl.col("code"),
-        text_value=pl.col("text_value"),
-        numeric_value=pl.col("numeric_value"),
-        datetime_value=pl.col("datetime_value"),
-        metadata=pl.col("metadata"),
-    )
+                code_metadata[code] = result
 
-    print("All events", all_events.schema)
+    metadata = {
+        "dataset_name": "MIMIC-IV",
+        "dataset_version": MIMIC_VERSION,
+        "etl_name": "esds_etl.mimic",
+        "etl_version": esds_etl.__version__,
+        "code_metadata": code_metadata,
+    }
 
-    grouped_by_time = all_events.groupby("patient_id", "time").agg(measurements=measurement)
+    jsonschema.validate(instance=metadata, schema=esds.dataset_metadata)
 
-    print("Grouped", grouped_by_time.schema)
-
-    event = pl.struct(
-        pl.col("time"),
-        pl.col("measurements"),
-    )
-
-    grouped_by_patient = grouped_by_time.groupby("patient_id").agg(events=event.sort_by(pl.col("time")))
-
-    grouped_by_patient.collect().write_parquet("result.parquet", compression=None)
-
-    load_back = pq.read_table("result.parquet")
-    event_schema = load_back.schema.field("events").type.value_type
-    measurement_schema = event_schema.field("measurements").type.value_type
-    metadata_schema = measurement_schema.field("metadata").type
-    desired_schema = esds.patient_schema(metadata_schema)
-    casted = load_back.cast(desired_schema)
-    print(load_back.schema)
-    print(desired_schema)
-    pq.write_table(casted, "final_results.parquet")
-
-    d_items = pl.read_csv(os.path.join(src_mimic_version, "icu", "d_items.csv.gz"))
-
-    print(d_items)
+    with open(os.path.join(args.destination, "metadata.json"), "w") as f:
+        json.dump(metadata, f)

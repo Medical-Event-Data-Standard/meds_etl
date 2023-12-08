@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "esds_etl"
-version = "0.1"
+dynamic = ["version"]
 description = "A data standard for working with event stream data"
 readme = "README.md"
 license = {text = "Apache-2.0"}
@@ -17,6 +17,9 @@ dependencies = [
 
 [project.scripts]
 esds_etl_mimic = "esds_etl.mimic:main"
+
+[tool.setuptools_scm]
+version_file = "src/esds_etl/_version.py"
 
 [tool.isort]
 multi_line_output = 3
