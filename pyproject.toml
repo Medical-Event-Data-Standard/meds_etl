@@ -3,7 +3,7 @@ requires = ["setuptools >= 69.0", "setuptools-scm>=8.0"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "esds_etl"
+name = "meds_etl"
 dynamic = ["version"]
 description = "A data standard for working with event stream data"
 readme = "README.md"
@@ -16,10 +16,11 @@ dependencies = [
 ]
 
 [project.scripts]
-esds_etl_mimic = "esds_etl.mimic:main"
+meds_etl_mimic = "meds_etl.mimic:main"
+meds_etl_omop = "meds_etl.omop:main"
 
 [tool.setuptools_scm]
-version_file = "src/esds_etl/_version.py"
+version_file = "src/meds_etl/_version.py"
 
 [tool.isort]
 multi_line_output = 3

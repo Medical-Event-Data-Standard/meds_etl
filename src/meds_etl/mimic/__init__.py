@@ -3,31 +3,24 @@ import json
 import os
 import shutil
 import subprocess
-import tempfile
 from importlib.resources import files
 
-import esds
 import jsonschema
+import meds
 import polars as pl
 import pyarrow.parquet as pq
 
-import esds_etl
+import meds_etl
 
 MIMIC_VERSION = "2.2"
 
 
 def main():
-    parser = argparse.ArgumentParser(prog="esds_etl_mimic", description="Performs an ETL from MIMIC_IV to ESDS")
+    parser = argparse.ArgumentParser(prog="meds_etl_mimic", description="Performs an ETL from MIMIC_IV to MEDS")
     parser.add_argument("src_mimic", type=str)
     parser.add_argument("destination", type=str)
     parser.add_argument("--num_shards", type=int, default=100)
     args = parser.parse_args()
-
-    os.makedirs(args.destination, exist_ok=True)
-
-    data_dir = os.path.join(args.destination, "data")
-
-    os.makedirs(data_dir, exist_ok=True)
 
     if not os.path.exists(args.src_mimic):
         raise ValueError(f'The source MIMIC_IV folder ("{args.src_mimic}") does not seem to exist?')
@@ -36,6 +29,8 @@ def main():
 
     if not os.path.exists(src_mimic_version):
         raise ValueError(f'The source MIMIC_IV folder does not contain a version 2.2 subfolder ("{src_mimic_version}")')
+
+    os.makedirs(args.destination)
 
     all_tables = {
         # Explicitly ignore icustays as it is redunant with hosp/transfers
@@ -299,11 +294,10 @@ def main():
         os.path.join(src_mimic_version, "hosp", "admissions" + ".csv.gz"), infer_schema_length=0
     ).lazy()
 
+    decompressed_dir = os.path.join(args.destination, "decompressed")
+    os.mkdir(decompressed_dir)
+
     temp_dir = os.path.join(args.destination, "temp")
-
-    if os.path.exists(temp_dir):
-        shutil.rmtree(temp_dir)
-
     os.mkdir(temp_dir)
 
     for shard_index in range(args.num_shards):
@@ -312,17 +306,15 @@ def main():
     print("Processing tables into " + temp_dir)
 
     for table_name, mapping_codes in all_tables.items():
-        # if 'prescription' not in table_name:
-        #    continue
         print("Processing", table_name)
         if mapping_codes is None:
             continue
 
-        uncompressed_path = os.path.join(src_mimic_version, table_name + ".csv")
+        uncompressed_path = os.path.join(decompressed_dir, table_name.replace("/", "_") + ".csv")
         compressed_path = os.path.join(src_mimic_version, table_name + ".csv.gz")
 
-        if not os.path.exists(uncompressed_path):
-            subprocess.run(["gunzip", "-k", compressed_path])
+        with open(uncompressed_path, "w") as f:
+            subprocess.run(["gunzip", "-c", compressed_path], stdout=f)
 
         if not isinstance(mapping_codes, list):
             mapping_codes = [mapping_codes]
@@ -349,11 +341,15 @@ def main():
                     value.str.to_datetime("%Y-%m-%d", strict=False),
                 )
                 numeric_value = value.cast(pl.Float32, strict=False)
-                text_value = datetime_value.is_null() & numeric_value.is_null() & (value != pl.lit(""))
+                text_value = (
+                    pl.when(datetime_value.is_null() & numeric_value.is_null() & (value != pl.lit("")))
+                    .then(value)
+                    .otherwise(pl.lit(None, dtype=str))
+                )
             else:
-                datetime_value = pl.lit(None)
-                numeric_value = pl.lit(None)
-                text_value = pl.lit(None)
+                datetime_value = pl.lit(None, dtype=pl.Datetime)
+                numeric_value = pl.lit(None, dtype=pl.Float32)
+                text_value = pl.lit(None, dtype=str)
 
             if "metadata" not in mapping_code:
                 mapping_code["metadata"] = {}
@@ -404,7 +400,15 @@ def main():
                     )
                     shard.write_parquet(fname, compression="uncompressed")
 
+        os.remove(uncompressed_path)
+
+    shutil.rmtree(decompressed_dir)
+
     print("Processing each shard")
+
+    data_dir = os.path.join(args.destination, "data")
+    os.mkdir(data_dir)
+
     for shard_index in range(args.num_shards):
         print("Processing shard ", shard_index)
         shard_dir = os.path.join(temp_dir, str(shard_index))
@@ -444,20 +448,18 @@ def main():
         # We do this conversion using the pyarrow library
 
         # Save and load our data in order to convert to pyarrow library
-        with tempfile.NamedTemporaryFile() as temp_file:
-            grouped_by_patient.collect().write_parquet(temp_file.name, compression="uncompressed")
-            load_back = pq.read_table(temp_file.name)
+        converted = grouped_by_patient.collect().to_arrow()
 
         # Now we need to reconstruct the schema
-        # We do this by pulling the metadata schema and then using esds.patient_schema
-        event_schema = load_back.schema.field("events").type.value_type
+        # We do this by pulling the metadata schema and then using meds.patient_schema
+        event_schema = converted.schema.field("events").type.value_type
         measurement_schema = event_schema.field("measurements").type.value_type
         metadata_schema = measurement_schema.field("metadata").type
 
-        desired_schema = esds.patient_schema(metadata_schema)
+        desired_schema = meds.patient_schema(metadata_schema)
 
         # All the larg_lists are now converted to lists, so we are good to load with huggingface
-        casted = load_back.cast(desired_schema)
+        casted = converted.cast(desired_schema)
 
         pq.write_table(casted, os.path.join(data_dir, f"data_{shard_index}.parquet"))
 
@@ -499,7 +501,7 @@ def main():
     }
 
     for fname, mapping_info in code_metadata_files.items():
-        with files("esds_etl.mimic.concept_map").joinpath(fname + ".csv").open("rb") as f:
+        with files("meds_etl.mimic.concept_map").joinpath(fname + ".csv").open("rb") as f:
             table = pl.read_csv(f, infer_schema_length=0)
             code_and_value = table.select(
                 code=mapping_info["code"], descr=mapping_info["descr"], parent=mapping_info["parent"]
@@ -522,12 +524,12 @@ def main():
     metadata = {
         "dataset_name": "MIMIC-IV",
         "dataset_version": MIMIC_VERSION,
-        "etl_name": "esds_etl.mimic",
-        "etl_version": esds_etl.__version__,
+        "etl_name": "meds_etl.mimic",
+        "etl_version": meds_etl.__version__,
         "code_metadata": code_metadata,
     }
 
-    jsonschema.validate(instance=metadata, schema=esds.dataset_metadata)
+    jsonschema.validate(instance=metadata, schema=meds.dataset_metadata)
 
     with open(os.path.join(args.destination, "metadata.json"), "w") as f:
         json.dump(metadata, f)
