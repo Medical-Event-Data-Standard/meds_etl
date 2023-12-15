@@ -15,9 +15,6 @@ import pyarrow.parquet as pq
 
 import meds_etl
 
-OMOP_BIRTH = 4083587
-OMOP_DEATH = 4306655
-
 
 def get_table_files(src_omop, table_name, table_details={}):
     if table_details.get("file_suffix"):
@@ -230,10 +227,101 @@ def main():
 
     os.makedirs(args.destination, exist_ok=True)
 
+    events = []
+
+    decompressed_dir = os.path.join(args.destination, "decompressed")
+    os.mkdir(decompressed_dir)
+
+    temp_dir = os.path.join(args.destination, "temp")
+    os.mkdir(temp_dir)
+
+    for shard_index in range(args.num_shards):
+        os.mkdir(os.path.join(temp_dir, str(shard_index)))
+
+    concept_id_map = {}
+
+    code_metadata = {}
+
+    for concept_file in get_table_files(args.src_omop, "concept"):
+        with load_file(decompressed_dir, concept_file) as f:
+            concept = pl.read_csv(f.name)
+            concept_id = pl.col("concept_id").cast(pl.Int64)
+            code = pl.col("vocabulary_id") + "/" + pl.col("concept_code")
+            result = concept.select(concept_id=concept_id, code=code).to_dict(as_series=False)
+            concept_id_map |= dict(zip(result["concept_id"], result["code"]))
+
+            custom_concepts = (
+                concept.filter(concept_id > 2_000_000_000)
+                .select(code=code, description=pl.col("concept_name"))
+                .to_dict()
+            )
+            for i in range(len(custom_concepts["code"])):
+                code_metadata[custom_concepts["code"][i]] = {
+                    "description": custom_concepts["description"][i],
+                    "parent_codes": [],
+                }
+    omop_birth = None
+    omop_death = None
+
+    for concept_id, code in concept_id_map.items():
+        if code == meds.birth_code:
+            omop_birth = concept_id
+        elif code == meds.death_code:
+            omop_death = concept_id
+
+    for concept_relationship_file in get_table_files(args.src_omop, "concept_relationship"):
+        with load_file(decompressed_dir, concept_relationship_file) as f:
+            concept_relationship = pl.read_csv(f.name)
+
+            concept_id_1 = pl.col("concept_id_1").cast(pl.Int64)
+            concept_id_2 = pl.col("concept_id_2").cast(pl.Int64)
+
+            custom_relationships = (
+                concept_relationship.filter(
+                    concept_id_1 > 2_000_000_000,
+                    pl.col("relationship_id") == "Maps to",
+                    concept_id_1 != concept_id_2,
+                )
+                .select(concept_id_1=concept_id_1, concept_id_2=concept_id_2)
+                .to_dict(as_series=False)
+            )
+
+            for concept_id_1, concept_id_2 in zip(
+                custom_relationships["concept_id_1"], custom_relationships["concept_id_2"]
+            ):
+                if concept_id_1 in concept_id_map and concept_id_2 in concept_id_map:
+                    code_metadata[concept_id_map[concept_id_1]]["parent_codes"].append(concept_id_map[concept_id_2])
+
+    datasets = []
+    dataset_versions = []
+    for cdm_source_file in get_table_files(args.src_omop, "cdm_source"):
+        with load_file(decompressed_dir, cdm_source_file) as f:
+            cdm_source = pl.read_csv(f.name)
+            cdm_source = cdm_source.rename({c: c.lower() for c in cdm_source.columns})
+            cdm_source = cdm_source.to_dict(as_series=False)
+
+            datasets.extend(cdm_source["cdm_source_name"])
+            dataset_versions.extend(cdm_source["cdm_release_date"])
+
+    metadata = {
+        "dataset_name": "|".join(datasets),
+        "dataset_version": "|".join(dataset_versions),
+        "etl_name": "meds_etl.omop",
+        "etl_version": meds_etl.__version__,
+        "code_metadata": code_metadata,
+    }
+
+    jsonschema.validate(instance=metadata, schema=meds.dataset_metadata)
+
+    with open(os.path.join(args.destination, "metadata.json"), "w") as f:
+        json.dump(metadata, f)
+
+    all_tasks = []
+
     tables = {
         "person": [
             {
-                "force_concept_id": OMOP_BIRTH,
+                "force_concept_id": omop_birth,
             },
             {
                 "concept_id_field": "gender_concept_id",
@@ -253,7 +341,7 @@ def main():
             "file_suffix": "occurrence",
         },
         "death": {
-            "force_concept_id": OMOP_DEATH,
+            "force_concept_id": omop_death,
         },
         "procedure": {
             "file_suffix": "occurrence",
@@ -280,96 +368,6 @@ def main():
             "fallback_concept_id": 4203722,
         },
     }
-
-    events = []
-
-    decompressed_dir = os.path.join(args.destination, "decompressed")
-    os.mkdir(decompressed_dir)
-
-    temp_dir = os.path.join(args.destination, "temp")
-    os.mkdir(temp_dir)
-
-    for shard_index in range(args.num_shards):
-        os.mkdir(os.path.join(temp_dir, str(shard_index)))
-
-    concept_id_map = {}
-
-    code_metadata = {}
-
-    if True:
-        for concept_file in get_table_files(args.src_omop, "concept"):
-            with load_file(decompressed_dir, concept_file) as f:
-                concept = pl.read_csv(f.name)
-                concept_id = pl.col("concept_id").cast(pl.Int64)
-                code = pl.col("vocabulary_id") + "/" + pl.col("concept_code")
-                result = concept.select(concept_id=concept_id, code=code).to_dict(as_series=False)
-                concept_id_map |= dict(zip(result["concept_id"], result["code"]))
-
-                custom_concepts = (
-                    concept.filter(concept_id > 2_000_000_000)
-                    .select(code=code, description=pl.col("concept_name"))
-                    .to_dict()
-                )
-                for i in range(len(custom_concepts["code"])):
-                    code_metadata[custom_concepts["code"][i]] = {
-                        "description": custom_concepts["description"][i],
-                        "parent_codes": [],
-                    }
-
-        for concept_relationship_file in get_table_files(args.src_omop, "concept_relationship"):
-            with load_file(decompressed_dir, concept_relationship_file) as f:
-                concept_relationship = pl.read_csv(f.name)
-
-                concept_id_1 = pl.col("concept_id_1").cast(pl.Int64)
-                concept_id_2 = pl.col("concept_id_2").cast(pl.Int64)
-
-                custom_relationships = (
-                    concept_relationship.filter(
-                        concept_id_1 > 2_000_000_000,
-                        pl.col("relationship_id") == "Maps to",
-                        concept_id_1 != concept_id_2,
-                    )
-                    .select(concept_id_1=concept_id_1, concept_id_2=concept_id_2)
-                    .to_dict(as_series=False)
-                )
-
-                for concept_id_1, concept_id_2 in zip(
-                    custom_relationships["concept_id_1"], custom_relationships["concept_id_2"]
-                ):
-                    if concept_id_1 in concept_id_map and concept_id_2 in concept_id_map:
-                        code_metadata[concept_id_map[concept_id_1]]["parent_codes"].append(concept_id_map[concept_id_2])
-
-        datasets = []
-        dataset_versions = []
-        for cdm_source_file in get_table_files(args.src_omop, "cdm_source"):
-            with load_file(decompressed_dir, cdm_source_file) as f:
-                cdm_source = pl.read_csv(f.name)
-                cdm_source = cdm_source.rename({c: c.lower() for c in cdm_source.columns})
-                cdm_source = cdm_source.to_dict(as_series=False)
-
-                datasets.extend(cdm_source["cdm_source_name"])
-                dataset_versions.extend(cdm_source["cdm_release_date"])
-
-        metadata = {
-            "dataset_name": "|".join(datasets),
-            "dataset_version": "|".join(dataset_versions),
-            "etl_name": "meds_etl.omop",
-            "etl_version": meds_etl.__version__,
-            "code_metadata": code_metadata,
-        }
-
-        jsonschema.validate(instance=metadata, schema=meds.dataset_metadata)
-
-        with open(os.path.join(args.destination, "metadata.json"), "w") as f:
-            json.dump(metadata, f)
-
-        with open("temp.pkl", "wb") as f:
-            pickle.dump(concept_id_map, f)
-    else:
-        with open("temp.pkl", "rb") as f:
-            concept_id_map = pickle.load(f)
-
-    all_tasks = []
 
     concept_id_map_data = pickle.dumps(concept_id_map)
 

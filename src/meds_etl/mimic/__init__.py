@@ -230,7 +230,7 @@ def main():
         "hosp/patients": [
             {
                 # Birth
-                "code": pl.lit("SNOMED/184099003"),
+                "code": pl.lit(meds.birth_code),
                 "time": pl.datetime(pl.col("anchor_year").cast(int) - pl.col("anchor_age").cast(int), 1, 1).cast(str),
             },
             {
@@ -239,7 +239,7 @@ def main():
             },
             {
                 # Death
-                "code": pl.lit("SNOMED/419620001"),
+                "code": pl.lit(meds.death_code),
                 "time": pl.col("dod"),
                 "possibly_null_time": True,
             },
