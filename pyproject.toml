@@ -15,6 +15,7 @@ dependencies = [
     "polars >= 0.19",
     "jsonschema >= 4.0.0",
     "meds >= 0.1",
+    "typing_extensions >= 4.0",
 ]
 
 [project.scripts]
