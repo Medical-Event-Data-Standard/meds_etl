@@ -25,6 +25,10 @@ jobs:
       run: |
         python -m pip install --upgrade pip
         python -m pip install flake8 pytest
+    - name: Download MIMIC-IV-Demo (v2.2)
+      run: |
+        # Download the MIMIC-IV-Demo dataset (v2.2) to a tests/data/ directory
+        wget -r -N -c --no-host-directories --cut-dirs=1 -np -P tests/data https://physionet.org/files/mimic-iv-demo/2.2/
     - name: Run tests
       run: |
-        pytest
+        pytest -v
