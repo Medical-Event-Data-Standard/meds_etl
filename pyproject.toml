@@ -16,6 +16,7 @@ dependencies = [
     "jsonschema >= 4.0.0",
     "meds >= 0.1",
     "typing_extensions >= 4.0",
+    "datasets >= 2.0.0",
 ]
 
 [project.scripts]
