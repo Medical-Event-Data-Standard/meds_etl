@@ -3,6 +3,8 @@ import pytest
 import shutil
 import subprocess
 
+from datasets import Dataset
+
 
 def test_hello_world():
     """
@@ -39,6 +41,9 @@ class TestMimicETL:
         # Run the ETL
         subprocess.run(['meds_etl_mimic', cls.source_path, cls.destination_path, "--num_shards", "10"], check=True)
 
+        # Initialize the dataset variable. Set it in the test_load_dataset method
+        cls.dataset = None
+
     @classmethod
     def teardown_class(cls):
         """
@@ -55,3 +60,30 @@ class TestMimicETL:
         files = os.listdir(self.destination_path)
         assert len(files) > 0, "Destination directory is empty. ETL did not produce any output."
 
+    def test_load_dataset(self):
+        """
+        Check that the ETL output can be loaded as a 🤗 dataset
+        """
+        path = os.path.join(self.destination_path, 'data')
+        self.__class__.dataset = Dataset.from_parquet(os.path.join(path, "*"))
+        assert self.dataset is not None, "Failed to load the dataset."
+
+    def test_number_of_patients(self):
+        """
+        The demo contains 100 patients.
+        """
+        assert len(self.dataset) == 100
+
+    def test_expected_features_exist(self):
+        """
+        The dataset should contain two columns: "patient_id" and "events".
+        """
+        expected_columns = ['patient_id', 'events']
+        assert all(column in self.dataset.features for column in expected_columns)
+
+    def test_expected_data_types(self):
+        """
+        Check that patient_id is an integer and events is a list.
+        """
+        assert self.dataset.features['patient_id'].dtype == 'int64'
+        assert isinstance(self.dataset[0]['events'], list)
