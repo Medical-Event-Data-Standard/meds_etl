@@ -28,7 +28,7 @@ def get_table_files(src_omop, table_name, table_details={}):
     elif os.path.exists(folder_name + ".csv"):
         return [folder_name + ".csv"]
     elif os.path.exists(folder_name + ".csv.gz"):
-        return [folder_name + ".csv"]
+        return [folder_name + ".csv.gz"]
     else:
         return []
 
