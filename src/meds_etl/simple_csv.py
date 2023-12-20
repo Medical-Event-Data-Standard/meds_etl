@@ -143,14 +143,14 @@ def main():
 
     all_tasks = []
 
-    random.seed(3422342)
-    random.shuffle(all_tasks)
-
     for i, csv_file in enumerate(os.listdir(args.src_csv)):
         full_csv_file = os.path.join(args.src_csv, csv_file)
         all_tasks.append(
             (full_csv_file, args.num_shards, temp_dir, decompressed_dir, i)
         )
+
+    random.seed(3422342)
+    random.shuffle(all_tasks)
 
     with multiprocessing.get_context("spawn").Pool(args.num_threads) as pool:
         for _ in pool.imap_unordered(process_file, all_tasks):
