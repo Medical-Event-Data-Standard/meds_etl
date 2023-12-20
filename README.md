@@ -56,11 +56,11 @@ For example, the following CSV would be converted into the following MEDS patien
 
 Input CSV:
 ```
-patient_id,time,code,value,clarity_source
-100,1990-11-30,Birth/Birth,,PATIENT
-100,1990-11-30,Gender/Gender,Male,PATIENT
-100,1990-11-30,Labs/SystolicBloodPressure,100,LABS
-100,1990-12-28,ICD10CM/E11.4,,DIAGNOSIS
+patient_id,time,code,value,arbitrary_metadata_column
+100,1990-11-30,Birth/Birth,,a string
+100,1990-11-30,Gender/Gender,Male,another string
+100,1990-11-30,Labs/SystolicBloodPressure,100,
+100,1990-12-28,ICD10CM/E11.4,,anything
 ```
 
 Output MEDS Patient:
@@ -71,14 +71,14 @@ Output MEDS Patient:
     {
       'time': 1990-11-30,
       'measurements': [
-        {'code': 'Birth/Birth', 'metadata': {'clarity_source': 'PATIENT'}},
-        {'code': 'Gender/Gender', 'text_value': 'Male', 'metadata': {'clarity_source': 'PATIENT'}},
-        {'code': 'Labs/SystolicBloodPressure', 'numeric_value': 100, 'metadata': {'clarity_source': 'LABS'}},
+        {'code': 'Birth/Birth', 'metadata': {'arbitrary_metadata_column': 'a string'}},
+        {'code': 'Gender/Gender', 'text_value': 'Male', 'metadata': {'arbitrary_metadata_column': 'another string'}},
+        {'code': 'Labs/SystolicBloodPressure', 'numeric_value': 100, 'metadata': {'arbitrary_metadata_column': None}},
       ],
     },
     {
       'time': 1990-12-28,
-      'measurements': [{'code': 'ICD10CM/E11.4', 'metadata': {'clarity_source': 'DIAGNOSIS'}}],
+      'measurements': [{'code': 'ICD10CM/E11.4', 'metadata': {'arbitrary_metadata_column': 'anything'}}],
     }, 
   ]
 }
