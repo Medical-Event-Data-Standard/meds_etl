@@ -14,6 +14,23 @@ import meds_etl
 
 MIMIC_VERSION = "2.2"
 
+def add_dot(code, position):
+    return pl.when(code.str.len_chars() > position).then(
+        code.str.slice(0, position) + '.' + code.str.slice(position)).otherwise(code)
+
+def normalize_icd_diagnosis(icd_version, icd_code):
+    icd9_code = pl.when(icd_code.str.starts_with("E")).then(
+        add_dot(icd_code, 4)).otherwise(add_dot(icd_code, 3))
+    
+    icd10_code = add_dot(icd_code, 3)
+
+    return pl.when(icd_version == "9").then("ICD9CM/" + icd9_code).otherwise("ICD10CM/" + icd10_code)
+
+def normalize_icd_procedure(icd_version, icd_code):
+    icd9_code = add_dot(icd_code, 2)
+    icd10_code = icd_code
+
+    return pl.when(icd_version == "9").then("ICD9Proc/" + icd9_code).otherwise("ICD10PCS/" + icd10_code)
 
 def main():
     parser = argparse.ArgumentParser(prog="meds_etl_mimic", description="Performs an ETL from MIMIC_IV to MEDS")
@@ -166,7 +183,7 @@ def main():
         "hosp/d_icd_procedures": None,
         "hosp/d_labitems": None,
         "hosp/diagnoses_icd": {
-            "code": "ICD" + pl.col("icd_version") + "CM/" + pl.col("icd_code"),
+            "code": normalize_icd_diagnosis(pl.col("icd_version"), pl.col("icd_code")),
             "time": pl.col("dischtime"),
             "requires_admission_join": True,
             "metadata": {
@@ -251,7 +268,7 @@ def main():
         "hosp/poe": None,
         "hosp/poe_detail": None,
         "hosp/prescriptions": {
-            "code": pl.coalesce("NDC/" + pl.col("ndc"), "MIMIC_IV_Drug/" + pl.col("drug")),
+            "code": pl.coalesce("NDC/" + pl.when(pl.col("ndc") != "0").then(pl.col("ndc")), "MIMIC_IV_Drug/" + pl.col("drug")),
             "time": pl.col("starttime"),
             "value": pl.col("dose_val_rx"),
             "metadata": {
@@ -262,7 +279,7 @@ def main():
             "possibly_null_time": True,
         },
         "hosp/procedures_icd": {
-            "code": "ICD" + pl.col("icd_version") + "CM/" + pl.col("icd_code"),
+            "code": normalize_icd_procedure(pl.col("icd_version"), pl.col("icd_code")),
             "time": pl.col("chartdate"),
             "metadata": {
                 "visit_id": pl.col("hadm_id"),
@@ -319,7 +336,7 @@ def main():
         if not isinstance(mapping_codes, list):
             mapping_codes = [mapping_codes]
 
-        for mapping_code in mapping_codes:
+        for map_index, mapping_code in enumerate(mapping_codes):
             reader = pl.read_csv_batched(
                 uncompressed_path,
                 infer_schema_length=0,
@@ -346,6 +363,7 @@ def main():
                     .then(value)
                     .otherwise(pl.lit(None, dtype=str))
                 )
+
             else:
                 datetime_value = pl.lit(None, dtype=pl.Datetime)
                 numeric_value = pl.lit(None, dtype=pl.Float32)
@@ -353,6 +371,9 @@ def main():
 
             if "metadata" not in mapping_code:
                 mapping_code["metadata"] = {}
+            
+            if 'unit' in mapping_code['metadata']:
+                unit = mapping_code['metadata']['unit']
 
             mapping_code["metadata"]["table"] = pl.lit(table_name)
 
@@ -374,10 +395,10 @@ def main():
                     table_csv = table_csv.join(admission_table, on="hadm_id")
 
                 if mapping_code.get("possibly_null_code", False):
-                    table_csv = table_csv.filter(code != pl.lit(None))
+                    table_csv = table_csv.filter(code.is_not_null())
 
                 if mapping_code.get("possibly_null_time", False):
-                    table_csv = table_csv.filter(time != pl.lit(None))
+                    table_csv = table_csv.filter(time.is_not_null())
 
                 event_data = (
                     table_csv.select(
@@ -396,7 +417,7 @@ def main():
 
                 for shard_index, shard in event_data.items():
                     fname = os.path.join(
-                        temp_dir, str(shard_index), f'{table_name.replace("/", "_")}_{batch_index}.parquet'
+                        temp_dir, str(shard_index), f'{table_name.replace("/", "_")}_{map_index}_{batch_index}.parquet'
                     )
                     shard.write_parquet(fname, compression="uncompressed")
 

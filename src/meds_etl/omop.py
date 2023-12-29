@@ -43,8 +43,9 @@ def load_file(decompressed_dir, fname):
 
 
 def process_table(args):
-    table_file, table_name, all_table_details, num_shards, concept_id_map_data, temp_dir, decompressed_dir, index = args
+    table_file, table_name, all_table_details, num_shards, concept_id_map_data, concept_name_map_data, temp_dir, decompressed_dir, index = args
     concept_id_map = pickle.loads(concept_id_map_data)
+    concept_name_map = pickle.loads(concept_name_map_data)
     print("Working on ", table_file, table_name, all_table_details)
 
     if not isinstance(all_table_details, list):
@@ -142,8 +143,8 @@ def process_table(args):
                             + pl.col(concept_id_field.replace("_concept_id", "_source_value"))
                         )
                         .otherwise(
-                            # Should be captured by the source concept id, so no backup needed.
-                            pl.lit(None, dtype=str)
+                            # Should be captured by the source concept id, so just map the value to a string.
+                            concept_id_value.map_dict(concept_name_map)
                         )
                     )
 
@@ -169,7 +170,7 @@ def process_table(args):
                     metadata["visit_id"] = pl.col("visit_occurrence_id")
 
                 if "unit_source_value" in batch.columns:
-                    metadata["unit"] = pl.col("unit_source_value")
+                    metadata['unit'] = pl.col("unit_source_value")
 
                 if "load_table_id" in batch.columns:
                     metadata["clarity_table"] = pl.col("load_table_id")
@@ -198,8 +199,8 @@ def process_table(args):
                         time=time,
                         code=code,
                         text_value=text_value,
-                        numeric_value=numeric_value,
                         datetime_value=datetime_value,
+                        numeric_value=numeric_value,
                         metadata=metadata,
                         shard=patient_id.hash(213345) % num_shards,
                     )
@@ -239,6 +240,7 @@ def main():
         os.mkdir(os.path.join(temp_dir, str(shard_index)))
 
     concept_id_map = {}
+    concept_name_map = {}
 
     code_metadata = {}
 
@@ -247,8 +249,9 @@ def main():
             concept = pl.read_csv(f.name)
             concept_id = pl.col("concept_id").cast(pl.Int64)
             code = pl.col("vocabulary_id") + "/" + pl.col("concept_code")
-            result = concept.select(concept_id=concept_id, code=code).to_dict(as_series=False)
+            result = concept.select(concept_id=concept_id, code=code, name=pl.col("concept_name")).to_dict(as_series=False)
             concept_id_map |= dict(zip(result["concept_id"], result["code"]))
+            concept_name_map |= dict(zip(result["concept_id"], result["name"]))
 
             custom_concepts = (
                 concept.filter(concept_id > 2_000_000_000)
@@ -370,6 +373,7 @@ def main():
     }
 
     concept_id_map_data = pickle.dumps(concept_id_map)
+    concept_name_map_data = pickle.dumps(concept_name_map)
 
     for table_name, table_details in tables.items():
         table_files = get_table_files(
@@ -377,7 +381,7 @@ def main():
         )
 
         all_tasks.extend(
-            (table_file, table_name, table_details, args.num_shards, concept_id_map_data, temp_dir, decompressed_dir, i)
+            (table_file, table_name, table_details, args.num_shards, concept_id_map_data, concept_name_map_data, temp_dir, decompressed_dir, i)
             for i, table_file in enumerate(table_files)
         )
 
@@ -418,8 +422,8 @@ def main():
         measurement = pl.struct(
             code=pl.col("code"),
             text_value=pl.col("text_value"),
-            numeric_value=pl.col("numeric_value"),
             datetime_value=pl.col("datetime_value"),
+            numeric_value=pl.col("numeric_value"),
             metadata=pl.col("metadata"),
         )
 
@@ -448,7 +452,7 @@ def main():
 
         desired_schema = meds.patient_schema(metadata_schema)
 
-        # All the larg_lists are now converted to lists, so we are good to load with huggingface
+        # All the large_lists are now converted to lists, so we are good to load with huggingface
         casted = converted.cast(desired_schema)
 
         pq.write_table(casted, os.path.join(data_dir, f"data_{shard_index}.parquet"))
