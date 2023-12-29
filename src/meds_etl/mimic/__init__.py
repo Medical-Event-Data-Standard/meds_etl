@@ -14,23 +14,29 @@ import meds_etl
 
 MIMIC_VERSION = "2.2"
 
+
 def add_dot(code, position):
-    return pl.when(code.str.len_chars() > position).then(
-        code.str.slice(0, position) + '.' + code.str.slice(position)).otherwise(code)
+    return (
+        pl.when(code.str.len_chars() > position)
+        .then(code.str.slice(0, position) + "." + code.str.slice(position))
+        .otherwise(code)
+    )
+
 
 def normalize_icd_diagnosis(icd_version, icd_code):
-    icd9_code = pl.when(icd_code.str.starts_with("E")).then(
-        add_dot(icd_code, 4)).otherwise(add_dot(icd_code, 3))
-    
+    icd9_code = pl.when(icd_code.str.starts_with("E")).then(add_dot(icd_code, 4)).otherwise(add_dot(icd_code, 3))
+
     icd10_code = add_dot(icd_code, 3)
 
     return pl.when(icd_version == "9").then("ICD9CM/" + icd9_code).otherwise("ICD10CM/" + icd10_code)
+
 
 def normalize_icd_procedure(icd_version, icd_code):
     icd9_code = add_dot(icd_code, 2)
     icd10_code = icd_code
 
     return pl.when(icd_version == "9").then("ICD9Proc/" + icd9_code).otherwise("ICD10PCS/" + icd10_code)
+
 
 def main():
     parser = argparse.ArgumentParser(prog="meds_etl_mimic", description="Performs an ETL from MIMIC_IV to MEDS")
@@ -268,7 +274,9 @@ def main():
         "hosp/poe": None,
         "hosp/poe_detail": None,
         "hosp/prescriptions": {
-            "code": pl.coalesce("NDC/" + pl.when(pl.col("ndc") != "0").then(pl.col("ndc")), "MIMIC_IV_Drug/" + pl.col("drug")),
+            "code": pl.coalesce(
+                "NDC/" + pl.when(pl.col("ndc") != "0").then(pl.col("ndc")), "MIMIC_IV_Drug/" + pl.col("drug")
+            ),
             "time": pl.col("starttime"),
             "value": pl.col("dose_val_rx"),
             "metadata": {
@@ -371,9 +379,6 @@ def main():
 
             if "metadata" not in mapping_code:
                 mapping_code["metadata"] = {}
-            
-            if 'unit' in mapping_code['metadata']:
-                unit = mapping_code['metadata']['unit']
 
             mapping_code["metadata"]["table"] = pl.lit(table_name)
 

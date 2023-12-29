@@ -43,7 +43,17 @@ def load_file(decompressed_dir, fname):
 
 
 def process_table(args):
-    table_file, table_name, all_table_details, num_shards, concept_id_map_data, concept_name_map_data, temp_dir, decompressed_dir, index = args
+    (
+        table_file,
+        table_name,
+        all_table_details,
+        num_shards,
+        concept_id_map_data,
+        concept_name_map_data,
+        temp_dir,
+        decompressed_dir,
+        index,
+    ) = args
     concept_id_map = pickle.loads(concept_id_map_data)
     concept_name_map = pickle.loads(concept_name_map_data)
     print("Working on ", table_file, table_name, all_table_details)
@@ -170,7 +180,7 @@ def process_table(args):
                     metadata["visit_id"] = pl.col("visit_occurrence_id")
 
                 if "unit_source_value" in batch.columns:
-                    metadata['unit'] = pl.col("unit_source_value")
+                    metadata["unit"] = pl.col("unit_source_value")
 
                 if "load_table_id" in batch.columns:
                     metadata["clarity_table"] = pl.col("load_table_id")
@@ -249,7 +259,9 @@ def main():
             concept = pl.read_csv(f.name)
             concept_id = pl.col("concept_id").cast(pl.Int64)
             code = pl.col("vocabulary_id") + "/" + pl.col("concept_code")
-            result = concept.select(concept_id=concept_id, code=code, name=pl.col("concept_name")).to_dict(as_series=False)
+            result = concept.select(concept_id=concept_id, code=code, name=pl.col("concept_name")).to_dict(
+                as_series=False
+            )
             concept_id_map |= dict(zip(result["concept_id"], result["code"]))
             concept_name_map |= dict(zip(result["concept_id"], result["name"]))
 
@@ -381,7 +393,17 @@ def main():
         )
 
         all_tasks.extend(
-            (table_file, table_name, table_details, args.num_shards, concept_id_map_data, concept_name_map_data, temp_dir, decompressed_dir, i)
+            (
+                table_file,
+                table_name,
+                table_details,
+                args.num_shards,
+                concept_id_map_data,
+                concept_name_map_data,
+                temp_dir,
+                decompressed_dir,
+                i,
+            )
             for i, table_file in enumerate(table_files)
         )
 

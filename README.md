@@ -27,7 +27,7 @@ Tests can be run from the project root with the following command:
 pytest -v
 ```
 
-Tests requiring data will be skipped unless the `tests/data/` folder is populated first. 
+Tests requiring data will be skipped unless the `tests/data/` folder is populated first.
 
 To download the testing data, run the following command/s from project root:
 
