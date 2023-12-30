@@ -230,7 +230,7 @@ def main():
     parser.add_argument("src_omop", type=str)
     parser.add_argument("destination", type=str)
     parser.add_argument("--num_shards", type=int, default=100)
-    parser.add_argument("--num_threads", type=int, default=1)
+    parser.add_argument("--num_proc", type=int, default=1)
     args = parser.parse_args()
 
     if not os.path.exists(args.src_omop):
@@ -411,7 +411,7 @@ def main():
     random.shuffle(all_tasks)
 
     if True:
-        with multiprocessing.get_context("spawn").Pool(args.num_threads) as pool:
+        with multiprocessing.get_context("spawn").Pool(args.num_proc) as pool:
             for _ in pool.imap_unordered(process_table, all_tasks):
                 pass
     else:
@@ -444,8 +444,8 @@ def main():
         measurement = pl.struct(
             code=pl.col("code"),
             text_value=pl.col("text_value"),
-            datetime_value=pl.col("datetime_value"),
             numeric_value=pl.col("numeric_value"),
+            datetime_value=pl.col("datetime_value"),
             metadata=pl.col("metadata"),
         )
 
