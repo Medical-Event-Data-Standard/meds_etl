@@ -7,6 +7,7 @@ import random
 import shutil
 import subprocess
 import tempfile
+import sys
 
 import jsonschema
 import meds
@@ -28,7 +29,7 @@ def get_table_files(src_omop, table_name, table_details={}):
     elif os.path.exists(folder_name + ".csv"):
         return [folder_name + ".csv"]
     elif os.path.exists(folder_name + ".csv.gz"):
-        return [folder_name + ".csv"]
+        return [folder_name + ".csv.gz"]
     else:
         return []
 
@@ -82,7 +83,7 @@ def process_table(args):
 
                 if table_name == "person":
                     time = pl.coalesce(
-                        pl.col("birth_datetime").str.to_datetime("%Y-%m-%d %H:%M:%S%.f", strict=False),
+                        pl.col("birth_datetime").str.to_datetime("%Y-%m-%d %H:%M:%S%.f", strict=False, time_unit='ms'),
                         pl.datetime(
                             pl.col("year_of_birth"),
                             pl.coalesce(pl.col("month_of_birth"), 1),
@@ -97,8 +98,8 @@ def process_table(args):
                     assert len(options) > 0, f"Could not find the time column {batch.columns}"
                     time = pl.coalesce(options)
                     time = pl.coalesce(
-                        time.str.to_datetime("%Y-%m-%d %H:%M:%S%.f", strict=False),
-                        time.str.to_datetime("%Y-%m-%d", strict=False).dt.offset_by("1d").dt.offset_by("-1s"),
+                        time.str.to_datetime("%Y-%m-%d %H:%M:%S%.f", strict=False, time_unit='ms'),
+                        time.str.to_datetime("%Y-%m-%d", strict=False, time_unit='ms').dt.offset_by("1d").dt.offset_by("-1s"),
                     )
 
                 if table_details.get("force_concept_id"):
@@ -161,8 +162,8 @@ def process_table(args):
                     value = pl.coalesce(value, backup_value)
 
                 datetime_value = pl.coalesce(
-                    value.str.to_datetime("%Y-%m-%d %H:%M:%S%.f", strict=False),
-                    value.str.to_datetime("%Y-%m-%d", strict=False),
+                    value.str.to_datetime("%Y-%m-%d %H:%M:%S%.f", strict=False, time_unit='ms'),
+                    value.str.to_datetime("%Y-%m-%d", strict=False, time_unit='ms'),
                 )
                 numeric_value = value.cast(pl.Float32, strict=False)
 
@@ -191,8 +192,8 @@ def process_table(args):
                 if (table_name + "_end_datetime") in batch.columns:
                     end = pl.col(table_name + "_end_datetime")
                     end = pl.coalesce(
-                        end.str.to_datetime("%Y-%m-%d %H:%M:%S%.f", strict=False),
-                        end.str.to_datetime("%Y-%m-%d", strict=False).dt.offset_by("1d").dt.offset_by("-1s"),
+                        end.str.to_datetime("%Y-%m-%d %H:%M:%S%.f", strict=False, time_unit='ms'),
+                        end.str.to_datetime("%Y-%m-%d", strict=False, time_unit='ms').dt.offset_by("1d").dt.offset_by("-1s"),
                     )
                     metadata["end"] = end
 
