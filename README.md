@@ -20,7 +20,6 @@ In order to run the MIMIC-IV ETL, simply run the following command:
 
 `meds_etl_omop omop omop-esds` where omop is a folder containing csv files (optionally gzipped) for an OMOP dataset. Each table should either be a csv file with the table name (such as person.csv) or a folder with the table name containing csv files.
 
-<<<<<<< HEAD
 ## Unit tests
 
 Tests can be run from the project root with the following command:
@@ -38,11 +37,11 @@ To download the testing data, run the following command/s from project root:
 wget -r -N -c --no-host-directories --cut-dirs=1 -np -P tests/data https://physionet.org/files/mimic-iv-demo/2.2/
 ```
 
-## MEDS CSV
+## MEDS Flat
 
 The MEDS schema can be a bit tricky to directly ETL into as it is a nested parquet schema and nested schemas are not supported by many pieces of software. In additional, the global join of combining all of a patient's data into a single value can be difficult to implement.
 
-In order to make things simpler for users, we have a special MEDS CSV schema, and ETLs back and forth between MEDS and MEDS CSV.
+In order to make things simpler for users, we have a special MEDS Flat schema, and ETLs back and forth between MEDS and MEDS Flat.
 
 This MEDS CSV schema is 1-1 compatible with MEDS. It is a simple tabular schema that has four core columns: patient_id, time, code, value. These columns correspond to the core ESDS columns, with the one exception that all the value columns have been combined into a single one.
 
