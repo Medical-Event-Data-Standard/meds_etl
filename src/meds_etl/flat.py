@@ -8,6 +8,7 @@ import shutil
 import subprocess
 import tempfile
 import functools
+import pathlib
 
 import jsonschema
 import meds
@@ -18,7 +19,56 @@ import meds_etl
 
 from typing import Literal, Iterable, TextIO
 
-def convert_meds_to_flat(source_meds_path: str, target_flat_path: str, num_proc: int = 1, format: Literal["csv", "parquet", "compressed_csv"] = "compressed_csv", time_format: Iterable[str] = ("%Y-%m-%d %H:%M:%S%.f", "%Y-%m-%d")) -> None:
+Format = Literal['csv', 'parquet', 'compressed_csv']
+
+def convert_file_to_flat(source_file: str, *, target_flat_data_path: str, format: Format, time_format: str) -> None:
+    table = pl.scan_parquet(source_file)
+    
+    table = table.explode('events')
+    table = table.unnest('events')
+
+    table = table.explode('measurements')
+    table = table.unnest('measurements')
+
+    if table.schema['metadata'] == pl.Null():
+        table = table.drop('metadata')
+    else:
+        table = table.unnest('metadata')
+
+    if format == 'parquet':
+        table.sink_parquet(os.path.join(target_flat_data_path, pathlib.Path(source_file).with_suffix('.parquet').name))
+    elif format.endswith('csv'):
+        table = table.with_columns(
+            time=pl.col('time').dt.strftime(time_format),
+            datetime_value=pl.col('datetime_value').dt.strftime(time_format),
+        )
+        target = os.path.join(target_flat_data_path, pathlib.Path(source_file).with_suffix('.csv').name)
+        table.sink_csv(target)
+        if format == 'compressed_csv':
+            subprocess.run(["gzip", '-f', target])
+
+def convert_meds_to_flat(source_meds_path: str, target_flat_path: str, num_proc: int = 1, format: Format = "compressed_csv", time_format: str = "%Y-%m-%d %H:%M:%S%.f") -> None:
+#    os.mkdir(target_flat_path)
+
+    source_meds_data_path = os.path.join(source_meds_path, 'data')
+    source_files = os.listdir(source_meds_data_path)
+    tasks = [os.path.join(source_meds_data_path, source_file) for source_file in source_files]
+    
+    shutil.copyfile(os.path.join(source_meds_path, 'metadata.json'), os.path.join(target_flat_path, 'metadata.json'))
+    
+    target_flat_data_path = os.path.join(target_flat_path, "flat_data")
+#    os.mkdir(target_flat_data_path)
+
+    converter = functools.partial(
+        convert_file_to_flat, 
+        target_flat_data_path=target_flat_data_path, 
+        format=format, 
+        time_format=time_format,
+    )
+
+    with multiprocessing.Pool(processes=num_proc) as pool:
+        for _ in pool.imap_unordered(converter, tasks):
+            pass
 
 def convert_meds_to_flat_main():
     parser = argparse.ArgumentParser(prog="meds_reverse_etl_flat", description="Performs an ETL from MEDS to MEDS Flat")
@@ -27,7 +77,7 @@ def convert_meds_to_flat_main():
     parser.add_argument("--num_proc", type=int, default=1)
     parser.add_argument("--format", type=str, default="compressed_csv", choices=["csv", "parquet", "compressed_csv"])
     args = parser.parse_args()
-    convert_meds_to_flat(**args)
+    convert_meds_to_flat(**vars(args))
 
 def load_file(decompressed_dir: str, fname: str) -> TextIO:
     if fname.endswith(".gz"):
@@ -187,7 +237,7 @@ def convert_flat_to_meds(source_flat_path: str, target_meds_path: str, num_shard
     csv_tasks = []
     parquet_tasks = []
 
-    source_flat_data_path = os.path.join(source_flat_path, 'data')
+    source_flat_data_path = os.path.join(source_flat_path, 'flat_data')
 
     for flat_file in os.listdir(source_flat_data_path):
         full_flat_file = os.path.join(source_flat_data_path, flat_file)
