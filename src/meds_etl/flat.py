@@ -4,6 +4,7 @@ import argparse
 import csv
 import functools
 import gzip
+import logging
 import multiprocessing
 import os
 import pathlib
@@ -132,14 +133,14 @@ def verify_shard(shard, event_file):
     for important_column in ("patient_id", "time", "code"):
         rows_with_invalid_code = shard.filter(pl.col(important_column).is_null())
         if len(rows_with_invalid_code) != 0:
-            print("Have rows with invalid " + important_column + " " + event_file)
+            logging.error("Have rows with invalid " + important_column + " " + event_file)
             for row in rows_with_invalid_code:
-                print(row)
+                logging.error(str(row))
             raise ValueError("Cannot have rows with invalid " + important_column + " " + event_file)
 
 
 def process_parquet_file(event_file: str, *, temp_dir: str, num_shards: int, metadata_columns: List[str]):
-    print("Working on ", event_file)
+    logging.info("Working on ", event_file)
 
     table = pl.scan_parquet(event_file)
 
@@ -197,7 +198,7 @@ def process_csv_file(
     time_formats: Iterable[str],
     metadata_columns: List[str],
 ):
-    print("Working on ", event_file)
+    logging.info("Working on ", event_file)
 
     with load_file(decompressed_dir, event_file) as temp_f:
         table = pl.read_csv_batched(temp_f.name, infer_schema_length=0, batch_size=1_000_000)
@@ -360,13 +361,13 @@ def convert_flat_to_meds(
 
     shutil.rmtree(decompressed_dir)
 
-    print("Processing each shard")
+    logging.info("Processing each shard")
 
     data_dir = os.path.join(target_meds_path, "data")
     os.mkdir(data_dir)
 
     for shard_index in range(num_shards):
-        print("Processing shard ", shard_index)
+        logging.info("Processing shard ", shard_index)
         shard_dir = os.path.join(temp_dir, str(shard_index))
 
         if len(os.listdir(shard_dir)) == 0:
