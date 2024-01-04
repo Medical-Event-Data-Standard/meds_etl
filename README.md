@@ -51,6 +51,8 @@ In order to convert a MEDS Flat dataset into MEDS, simple run the following comm
 
 `meds_etl_flat flat flat_meds` where flat is a folder containing MEDS Flat data and `flat_meds` is the target folder to store the results in.
 
+The expected input format is a folder with a metadata.json file and a flat_data subfolder. The flat_data subfolder can contain any number of csv or Parquet files.
+
 For example, the following CSV would be converted into the following MEDS patient:
 
 Input CSV:
