@@ -12,7 +12,7 @@ import random
 import shutil
 import subprocess
 import tempfile
-from typing import Iterable, List, Literal, Set, TextIO, cast
+from typing import Iterable, List, Literal, Set, TextIO, Tuple, cast
 
 import meds
 import polars as pl
@@ -22,6 +22,7 @@ import pyarrow.parquet as pq
 mp = multiprocessing.get_context("forkserver")
 
 Format = Literal["csv", "parquet", "compressed_csv"]
+known_columns = {"patient_id", "numeric_value", "datetime_value", "text_value", "value", "time", "code"}
 
 
 def convert_file_to_flat(source_file: str, *, target_flat_data_path: str, format: Format, time_format: str) -> None:
@@ -139,30 +140,66 @@ def verify_shard(shard, event_file):
             raise ValueError("Cannot have rows with invalid " + important_column + " " + event_file)
 
 
-def process_parquet_file(event_file: str, *, temp_dir: str, num_shards: int, metadata_columns: List[str]):
+def convert_generic_value_to_specific(generic_value: pl.Expr, time_formats) -> Tuple[pl.Expr, pl.Expr, pl.Expr]:
+    datetime_value = pl.coalesce(
+        [generic_value.str.to_datetime(time_format, strict=False, time_unit="us") for time_format in time_formats]
+    )
+
+    numeric_value = (
+        pl.when(datetime_value.is_null())
+        .then(generic_value.cast(pl.Float32, strict=False))
+        .otherwise(pl.lit(None, dtype=pl.Float32))
+    )
+
+    text_value = (
+        pl.when(datetime_value.is_null() & numeric_value.is_null())
+        .then(generic_value)
+        .otherwise(pl.lit(None, dtype=pl.Utf8()))
+    )
+
+    return datetime_value, numeric_value, text_value
+
+
+def process_parquet_file(
+    event_file: str, *, temp_dir: str, num_shards: int, time_formats: Iterable[str], metadata_columns: List[str]
+):
     logging.info("Working on ", event_file)
 
     table = pl.scan_parquet(event_file)
 
     table = table.rename({c: c.lower() for c in table.columns})
 
-    patient_id = pl.col("patient_id")
-    time = pl.col("time")
+    patient_id = pl.col("patient_id").cast(pl.Int64())
+    time = pl.col("time").cast(pl.Datetime())
 
-    code = pl.col("code")
+    code = pl.col("code").cast(pl.Utf8())
 
-    datetime_value = pl.col("datetime_value")
+    if "value" in table.columns:
+        for sub_value in ("datetime_value", "numeric_value", "text_value"):
+            assert sub_value not in table.columns, "Cannot have both generic value and specific value columns"
+        datetime_value, numeric_value, text_value = convert_generic_value_to_specific(pl.col("value"), time_formats)
+    else:
+        if "datetime_value" in table.columns:
+            datetime_value = pl.col("datetime_value").cast(pl.Float32())
+        else:
+            datetime_value = pl.lit(None, dtype=pl.Datetime())
+        datetime_value = datetime_value.cast(pl.Datetime())
 
-    numeric_value = pl.col("numeric_value")
+        if "numeric_value" in table.columns:
+            numeric_value = pl.col("numeric_value").cast(pl.Float32())
+        else:
+            numeric_value = pl.lit(None, dtype=pl.Float32())
 
-    text_value = pl.col("text_value")
+        if "text_value" in table.columns:
+            text_value = pl.col("text_value").cast(pl.Utf8())
+        else:
+            text_value = pl.lit(None, dtype=pl.Utf8())
 
     metadata = {}
 
     for colname in table.columns:
-        if colname in ("patient_id", "time", "code", "datetime_value", "numeric_value", "text_value"):
-            continue
-        metadata[colname] = pl.col(colname)
+        if colname not in known_columns:
+            metadata[colname] = pl.col(colname).cast(pl.Utf8())
 
     metadata = transform_metadata(metadata, metadata_columns)
 
@@ -218,25 +255,45 @@ def process_csv_file(
 
             patient_id = pl.col("patient_id").cast(pl.Int64)
             time = pl.col("time")
-
-            time = pl.coalesce([time.str.to_datetime(time_format, strict=False) for time_format in time_formats])
+            time = pl.coalesce(
+                [time.str.to_datetime(time_format, strict=False, time_unit="us") for time_format in time_formats]
+            )
 
             code = pl.col("code")
 
-            datetime_value = pl.coalesce(
-                [pl.col("datetime_value").str.to_datetime(time_format, strict=False) for time_format in time_formats]
-            )
+            if "value" in batch.columns:
+                for sub_value in ("datetime_value", "numeric_value", "text_value"):
+                    assert sub_value not in batch.columns, "Cannot have both generic value and specific value columns"
 
-            numeric_value = pl.col("numeric_value").cast(pl.Float32, strict=False)
+                datetime_value, numeric_value, text_value = convert_generic_value_to_specific(
+                    pl.col("value"), time_formats
+                )
+            else:
+                if "datetime_value" in batch.columns:
+                    datetime_value = pl.coalesce(
+                        [
+                            pl.col("datetime_value").str.to_datetime(time_format, strict=False, time_unit="us")
+                            for time_format in time_formats
+                        ]
+                    )
+                else:
+                    datetime_value = pl.lit(None, dtype=pl.Datetime(time_unit="us"))
 
-            text_value = pl.col("text_value")
+                if "numeric_value" in batch.columns:
+                    numeric_value = pl.col("numeric_value").cast(pl.Float32, strict=False)
+                else:
+                    numeric_value = pl.lit(None, dtype=pl.Float64())
+
+                if "text_value" in batch.columns:
+                    text_value = pl.col("text_value")
+                else:
+                    text_value = pl.lit(None, dtype=pl.Utf8())
 
             metadata = {}
 
             for colname in batch.columns:
-                if colname in ("patient_id", "time", "code", "datetime_value", "numeric_value", "text_value"):
-                    continue
-                metadata[colname] = pl.col(colname)
+                if colname not in known_columns:
+                    metadata[colname] = pl.col(colname)
 
             metadata = transform_metadata(metadata, metadata_columns)
 
@@ -313,7 +370,7 @@ def convert_flat_to_meds(
             for columns in pool.imap_unordered(get_parquet_columns, parquet_tasks):
                 metadata_columns_set |= columns
 
-            metadata_columns_set -= {"patient_id", "numeric_value", "datetime_value", "text_value", "time", "code"}
+            metadata_columns_set -= known_columns
             metadata_columns = sorted(list(metadata_columns_set))
 
             csv_processor = functools.partial(
@@ -324,8 +381,13 @@ def convert_flat_to_meds(
                 time_formats=time_formats,
                 metadata_columns=metadata_columns,
             )
+
             parquet_processor = functools.partial(
-                process_parquet_file, temp_dir=temp_dir, num_shards=num_shards, metadata_columns=metadata_columns
+                process_parquet_file,
+                temp_dir=temp_dir,
+                num_shards=num_shards,
+                time_formats=time_formats,
+                metadata_columns=metadata_columns,
             )
 
             for _ in pool.imap_unordered(csv_processor, csv_tasks):
@@ -339,7 +401,7 @@ def convert_flat_to_meds(
         for task in parquet_tasks:
             metadata_columns_set |= get_parquet_columns(task)
 
-        metadata_columns_set -= {"patient_id", "numeric_value", "datetime_value", "text_value", "time", "code"}
+        metadata_columns_set -= known_columns
         metadata_columns = sorted(list(metadata_columns_set))
 
         csv_processor = functools.partial(
@@ -351,7 +413,11 @@ def convert_flat_to_meds(
             metadata_columns=metadata_columns,
         )
         parquet_processor = functools.partial(
-            process_parquet_file, temp_dir=temp_dir, num_shards=num_shards, metadata_columns=metadata_columns
+            process_parquet_file,
+            temp_dir=temp_dir,
+            num_shards=num_shards,
+            time_formats=time_formats,
+            metadata_columns=metadata_columns,
         )
 
         for task in csv_tasks:
@@ -425,4 +491,4 @@ def convert_flat_to_meds_main():
     parser.add_argument("--num_shards", type=int, default=100)
     parser.add_argument("--num_proc", type=int, default=1)
     args = parser.parse_args()
-    convert_flat_to_meds(**args)
+    convert_flat_to_meds(**vars(args))
