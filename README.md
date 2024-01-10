@@ -43,7 +43,7 @@ The MEDS schema can be a bit tricky to use as it is a nested parquet schema and 
 
 In order to make things simpler for users, this package provides a special MEDS Flat schema and ETLs that transform between MEDS Flat and MEDS.
 
-MEDS Flat schema is a flattened version of MEDS. MEDS Flat data consists of a folder with a metadata.json file (from the MEDS metadata schema) and a "flat_data" folder with MEDS Flat data files. MEDS Flat data files must be either csvs (optionally gzipped) or parquet files that contain three core columns: "patient_id", "time", and "code". These columns correspond to the core MEDS columns. In addition, "datetime_value", "numeric_value" and/or "text_value" can be provided to match those columns in MEDS. Alternatively, a single "value" column can be provided, which will then be transformed into  "datetime_value", "numeric_value" and "text_value" as appropriate. 
+MEDS Flat schema is a flattened version of MEDS. MEDS Flat data consists of a folder with a metadata.json file (from the [MEDS metadata schema](https://github.com/Medical-Event-Data-Standard/meds/blob/main/src/meds/__init__.py#L99)) and a "flat_data" folder with MEDS Flat data files. MEDS Flat data files must be either csvs (optionally gzipped) or parquet files that contain three core columns: "patient_id", "time", and "code". These columns correspond to the core MEDS columns. In addition, "datetime_value", "numeric_value" and/or "text_value" can be provided to match those columns in MEDS. Alternatively, a single "value" column can be provided, which will then be transformed into  "datetime_value", "numeric_value" and "text_value" as appropriate. 
 
 Arbitrary additional columns can be added, each of which will become MEDS metadata columns.
 
