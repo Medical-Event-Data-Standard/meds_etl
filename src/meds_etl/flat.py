@@ -65,7 +65,8 @@ def convert_meds_to_flat(
     source_files = os.listdir(source_meds_data_path)
     tasks = [os.path.join(source_meds_data_path, source_file) for source_file in source_files]
 
-    shutil.copyfile(os.path.join(source_meds_path, "metadata.json"), os.path.join(target_flat_path, "metadata.json"))
+    if os.path.exists(os.path.join(source_meds_path, "metadata.json")):
+        shutil.copyfile(os.path.join(source_meds_path, "metadata.json"), os.path.join(target_flat_path, "metadata.json"))
 
     target_flat_data_path = os.path.join(target_flat_path, "flat_data")
     os.mkdir(target_flat_data_path)
@@ -344,7 +345,8 @@ def convert_flat_to_meds(
     for shard_index in range(num_shards):
         os.mkdir(os.path.join(temp_dir, str(shard_index)))
 
-    shutil.copyfile(os.path.join(source_flat_path, "metadata.json"), os.path.join(target_meds_path, "metadata.json"))
+    if os.path.exists(os.path.join(source_flat_path, "metadata.json")):
+        shutil.copyfile(os.path.join(source_flat_path, "metadata.json"), os.path.join(target_meds_path, "metadata.json"))
 
     csv_tasks = []
     parquet_tasks = []
