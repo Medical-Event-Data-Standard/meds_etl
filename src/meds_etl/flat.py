@@ -123,6 +123,9 @@ def get_parquet_columns(event_file: str) -> Set[str]:
 
 
 def transform_metadata(d, metadata_columns):
+    if len(metadata_columns) == 0:
+        return pl.lit(None)
+
     cols = []
     for column in metadata_columns:
         val = d.get(column, pl.lit(None, dtype=pl.Utf8))
@@ -142,6 +145,8 @@ def verify_shard(shard, event_file):
 
 
 def convert_generic_value_to_specific(generic_value: pl.Expr, time_formats) -> Tuple[pl.Expr, pl.Expr, pl.Expr]:
+    generic_value = generic_value.str.strip_chars()
+
     datetime_value = pl.coalesce(
         [generic_value.str.to_datetime(time_format, strict=False, time_unit="us") for time_format in time_formats]
     )
@@ -297,8 +302,6 @@ def process_csv_file(
                     metadata[colname] = pl.col(colname)
 
             metadata = transform_metadata(metadata, metadata_columns)
-
-            batch = batch.filter(code.is_not_null())
 
             event_data = (
                 batch.select(
