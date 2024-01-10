@@ -43,15 +43,13 @@ The MEDS schema can be a bit tricky to use as it is a nested parquet schema and 
 
 In order to make things simpler for users, this package provides a special MEDS Flat schema and ETLs that transform between MEDS Flat and MEDS.
 
-This MEDS CSV schema is 1-1 compatible with MEDS. It is a simple tabular schema that has four core columns: patient_id, time, code, value. These columns correspond to the core ESDS columns, with the one exception that all the value columns have been combined into a single one. Additional columns can be present, which correspond to event metadata.
+MEDS Flat schema is a flattened version of MEDS. MEDS Flat data consists of a folder with a metadata.json file (from the MEDS metadata schema) and a "flat_data" folder with MEDS Flat data files. MEDS Flat data files must be either csvs (optionally gzipped) or parquet files that contain three core columns: "patient_id", "time", and "code". These columns correspond to the core MEDS columns. In addition, "datetime_value", "numeric_value" and/or "text_value" can be provided to match those columns in MEDS. Alternatively, a single "value" column can be provided, which will then be transformed into  "datetime_value", "numeric_value" and "text_value" as appropriate. 
 
-For MEDS Flat, we support both CSV and Parquet input files for transforming into MEDS.
+Arbitrary additional columns can be added, each of which will become MEDS metadata columns.
 
 In order to convert a MEDS Flat dataset into MEDS, simple run the following command:
 
 `meds_etl_flat flat flat_meds` where flat is a folder containing MEDS Flat data and `flat_meds` is the target folder to store the results in.
-
-The expected input format is a folder with a metadata.json file and a flat_data subfolder. The flat_data subfolder can contain any number of csv or Parquet files.
 
 For example, the following CSV would be converted into the following MEDS patient:
 
