@@ -15,7 +15,7 @@ import pyarrow.parquet as pq
 import meds_etl.flat
 
 
-def get_random_patient(patient_id: int) -> meds.Patient:
+def get_random_patient(patient_id: int, include_metadata=True) -> meds.Patient:
     epoch = datetime.datetime(1990, 1, 1)
     birth = epoch + datetime.timedelta(days=random.randint(100, 1000))
     current_date = birth
@@ -52,27 +52,36 @@ def get_random_patient(patient_id: int) -> meds.Patient:
             {"time": current_date, "measurements": [{"code": code, "metadata": {"ontology": code_cat}}]}
         )
 
+    if not include_metadata:
+        for e in patient["events"]:
+            for m in e["measurements"]:
+                if "metadata" in m:
+                    del m["metadata"]
+
     return patient
 
 
-def create_example_patients():
+def create_example_patients(include_metadata=True):
     patients = []
     for i in range(200):
-        patients.append(get_random_patient(i))
+        patients.append(get_random_patient(i, include_metadata=include_metadata))
     return patients
 
 
-def create_dataset(tmp_path: pathlib.Path):
+def create_dataset(tmp_path: pathlib.Path, include_metadata=True):
     os.makedirs(tmp_path / "data", exist_ok=True)
 
-    metadata_schema = pa.struct(
-        [
-            ("ontology", pa.string()),
-            ("dummy", pa.string()),
-        ]
-    )
+    if not include_metadata:
+        metadata_schema = pa.null()
+    else:
+        metadata_schema = pa.struct(
+            [
+                ("ontology", pa.string()),
+                ("dummy", pa.string()),
+            ]
+        )
 
-    patients = create_example_patients()
+    patients = create_example_patients(include_metadata=include_metadata)
     patient_schema = meds.patient_schema(metadata_schema)
 
     patient_table = pa.Table.from_pylist(patients, patient_schema)
@@ -118,6 +127,21 @@ def roundrip_helper(tmp_path: pathlib.Path, patients: List[meds.Patient], format
 def test_roundtrip(tmp_path: pathlib.Path):
     meds_dataset = tmp_path / "meds"
     create_dataset(meds_dataset)
+    patients = pq.read_table(meds_dataset / "data" / "patients.parquet").to_pylist()
+    patients.sort(key=lambda a: a["patient_id"])
+
+    roundrip_helper(tmp_path, patients, "csv", 1)
+    roundrip_helper(tmp_path, patients, "compressed_csv", 1)
+    roundrip_helper(tmp_path, patients, "parquet", 1)
+
+    roundrip_helper(tmp_path, patients, "csv", 4)
+    roundrip_helper(tmp_path, patients, "compressed_csv", 4)
+    roundrip_helper(tmp_path, patients, "parquet", 4)
+
+
+def test_roundtrip_no_metadata(tmp_path: pathlib.Path):
+    meds_dataset = tmp_path / "meds"
+    create_dataset(meds_dataset, include_metadata=False)
     patients = pq.read_table(meds_dataset / "data" / "patients.parquet").to_pylist()
     patients.sort(key=lambda a: a["patient_id"])
 
