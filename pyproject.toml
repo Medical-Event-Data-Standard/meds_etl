@@ -21,8 +21,8 @@ dependencies = [
 [project.scripts]
 meds_etl_mimic = "meds_etl.mimic:main"
 meds_etl_omop = "meds_etl.omop:main"
-meds_etl_flat = "meds_etl.flat:convert_flat_to_meds_main"
-meds_reverse_etl_flat = "meds_etl.flat:convert_meds_to_flat_main"
+meds_etl_from_flat = "meds_etl.flat:convert_flat_to_meds_main"
+meds_etl_to_flat = "meds_etl.flat:convert_meds_to_flat_main"
 
 [tool.setuptools_scm]
 version_file = "src/meds_etl/_version.py"

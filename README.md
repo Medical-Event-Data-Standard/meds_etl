@@ -82,7 +82,7 @@ Output MEDS Patient:
   ]
 }
 
-We also support a reverse ETL, converting from MEDS to MEDS Flat.
+We also support an inverse ETL, converting from MEDS to MEDS Flat.
 
 The command for this is `meds_etl_to_flat`. For example:
 

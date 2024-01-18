@@ -16,10 +16,11 @@ import meds_etl.flat
 
 
 def get_random_patient(patient_id: int, include_metadata=True) -> meds.Patient:
+    random.seed(patient_id)
+
     epoch = datetime.datetime(1990, 1, 1)
     birth = epoch + datetime.timedelta(days=random.randint(100, 1000))
     current_date = birth
-    random.seed(patient_id)
 
     gender = "Gender/" + random.choice(["F", "M"])
     race = "Race/" + random.choice(["White", "Non-White"])
