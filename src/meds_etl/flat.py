@@ -22,10 +22,11 @@ import pyarrow.parquet as pq
 mp = multiprocessing.get_context("forkserver")
 
 Format = Literal["csv", "parquet", "compressed_csv"]
-known_columns = {"patient_id", "numeric_value", "datetime_value", "text_value", "value", "time", "code"}
+KNOWN_COLUMNS = {"patient_id", "numeric_value", "datetime_value", "text_value", "value", "time", "code"}
 
 
 def convert_file_to_flat(source_file: str, *, target_flat_data_path: str, format: Format, time_format: str) -> None:
+    """Convert a single MEDS file to MEDS Flat"""
     table = pl.scan_parquet(source_file)
 
     table = table.explode("events")
@@ -59,6 +60,7 @@ def convert_meds_to_flat(
     format: Format = "compressed_csv",
     time_format: str = "%Y-%m-%d %H:%M:%S%.f",
 ) -> None:
+    """Convert an entire MEDS dataset to MEDS Flat"""
     os.mkdir(target_flat_path)
 
     source_meds_data_path = os.path.join(source_meds_path, "data")
@@ -66,7 +68,9 @@ def convert_meds_to_flat(
     tasks = [os.path.join(source_meds_data_path, source_file) for source_file in source_files]
 
     if os.path.exists(os.path.join(source_meds_path, "metadata.json")):
-        shutil.copyfile(os.path.join(source_meds_path, "metadata.json"), os.path.join(target_flat_path, "metadata.json"))
+        shutil.copyfile(
+            os.path.join(source_meds_path, "metadata.json"), os.path.join(target_flat_path, "metadata.json")
+        )
 
     target_flat_data_path = os.path.join(target_flat_path, "flat_data")
     os.mkdir(target_flat_data_path)
@@ -138,10 +142,11 @@ def verify_shard(shard, event_file):
     for important_column in ("patient_id", "time", "code"):
         rows_with_invalid_code = shard.filter(pl.col(important_column).is_null())
         if len(rows_with_invalid_code) != 0:
-            logging.error("Have rows with invalid " + important_column + " " + event_file)
+            error_message = f"Have rows with invalid {important_column} in {event_file}"
+            logging.error(error_message)
             for row in rows_with_invalid_code:
                 logging.error(str(row))
-            raise ValueError("Cannot have rows with invalid " + important_column + " " + event_file)
+            raise ValueError(error_message)
 
 
 def convert_generic_value_to_specific(generic_value: pl.Expr, time_formats) -> Tuple[pl.Expr, pl.Expr, pl.Expr]:
@@ -166,30 +171,42 @@ def convert_generic_value_to_specific(generic_value: pl.Expr, time_formats) -> T
     return datetime_value, numeric_value, text_value
 
 
-def process_parquet_file(
-    event_file: str, *, temp_dir: str, num_shards: int, time_formats: Iterable[str], metadata_columns: List[str]
+def create_and_write_shards_from_table(
+    table, temp_dir: str, num_shards: int, time_formats: Iterable[str], metadata_columns: List[str], filename: str
 ):
-    logging.info("Working on ", event_file)
-
-    table = pl.scan_parquet(event_file)
-
     table = table.rename({c: c.lower() for c in table.columns})
 
     patient_id = pl.col("patient_id").cast(pl.Int64())
-    time = pl.col("time").cast(pl.Datetime())
+    time = pl.col("time")
+    if table.schema["time"] == pl.Utf8():
+        time = pl.coalesce(
+            [time.str.to_datetime(time_format, strict=False, time_unit="us") for time_format in time_formats]
+        )
+    else:
+        time = time.cast(pl.Datetime())
 
     code = pl.col("code").cast(pl.Utf8())
 
     if "value" in table.columns:
         for sub_value in ("datetime_value", "numeric_value", "text_value"):
-            assert sub_value not in table.columns, "Cannot have both generic value and specific value columns"
+            if sub_value in table.columns:
+                raise ValueError("Cannot have both generic value and specific value columns")
+
         datetime_value, numeric_value, text_value = convert_generic_value_to_specific(pl.col("value"), time_formats)
     else:
         if "datetime_value" in table.columns:
-            datetime_value = pl.col("datetime_value").cast(pl.Float32())
+            datetime_value = pl.col("datetime_value")
+            if table.schema["datetime_value"] == pl.Utf8():
+                datetime_value = pl.coalesce(
+                    [
+                        datetime_value.str.to_datetime(time_format, strict=False, time_unit="us")
+                        for time_format in time_formats
+                    ]
+                )
+            else:
+                datetime_value = datetime_value.cast(pl.Datetime())
         else:
             datetime_value = pl.lit(None, dtype=pl.Datetime())
-        datetime_value = datetime_value.cast(pl.Datetime())
 
         if "numeric_value" in table.columns:
             numeric_value = pl.col("numeric_value").cast(pl.Float32())
@@ -204,7 +221,7 @@ def process_parquet_file(
     metadata = {}
 
     for colname in table.columns:
-        if colname not in known_columns:
+        if colname not in KNOWN_COLUMNS:
             metadata[colname] = pl.col(colname).cast(pl.Utf8())
 
     metadata = transform_metadata(metadata, metadata_columns)
@@ -225,11 +242,23 @@ def process_parquet_file(
     )
 
     for shard_index, shard in event_data.items():
-        verify_shard(shard, event_file)
+        verify_shard(shard, filename)
 
-        cleaned_event_file = os.path.basename(event_file).split(".")[0]
-        fname = os.path.join(temp_dir, str(shard_index), f"{cleaned_event_file}.parquet")
+        fname = os.path.join(temp_dir, str(shard_index), filename)
         shard.write_parquet(fname, compression="uncompressed")
+
+
+def process_parquet_file(
+    event_file: str, *, temp_dir: str, num_shards: int, time_formats: Iterable[str], metadata_columns: List[str]
+):
+    """Convert a MEDS Flat parquet file to MEDS."""
+    logging.info("Working on ", event_file)
+
+    table = pl.scan_parquet(event_file)
+
+    cleaned_event_file = os.path.basename(event_file).split(".")[0]
+    fname = f"{cleaned_event_file}.parquet"
+    create_and_write_shards_from_table(table, temp_dir, num_shards, time_formats, metadata_columns, fname)
 
 
 def process_csv_file(
@@ -241,6 +270,7 @@ def process_csv_file(
     time_formats: Iterable[str],
     metadata_columns: List[str],
 ):
+    """Convert a MEDS Flat CSV file to MEDS."""
     logging.info("Working on ", event_file)
 
     with load_file(decompressed_dir, event_file) as temp_f:
@@ -257,72 +287,12 @@ def process_csv_file(
 
             batch = batch[0]
 
-            batch = batch.lazy().rename({c: c.lower() for c in batch.columns})
+            batch = batch.lazy()
 
-            patient_id = pl.col("patient_id").cast(pl.Int64)
-            time = pl.col("time")
-            time = pl.coalesce(
-                [time.str.to_datetime(time_format, strict=False, time_unit="us") for time_format in time_formats]
-            )
+            cleaned_event_file = os.path.basename(event_file).split(".")[0]
+            fname = f"{cleaned_event_file}_{batch_index}.parquet"
 
-            code = pl.col("code")
-
-            if "value" in batch.columns:
-                for sub_value in ("datetime_value", "numeric_value", "text_value"):
-                    assert sub_value not in batch.columns, "Cannot have both generic value and specific value columns"
-
-                datetime_value, numeric_value, text_value = convert_generic_value_to_specific(
-                    pl.col("value"), time_formats
-                )
-            else:
-                if "datetime_value" in batch.columns:
-                    datetime_value = pl.coalesce(
-                        [
-                            pl.col("datetime_value").str.to_datetime(time_format, strict=False, time_unit="us")
-                            for time_format in time_formats
-                        ]
-                    )
-                else:
-                    datetime_value = pl.lit(None, dtype=pl.Datetime(time_unit="us"))
-
-                if "numeric_value" in batch.columns:
-                    numeric_value = pl.col("numeric_value").cast(pl.Float32, strict=False)
-                else:
-                    numeric_value = pl.lit(None, dtype=pl.Float64())
-
-                if "text_value" in batch.columns:
-                    text_value = pl.col("text_value")
-                else:
-                    text_value = pl.lit(None, dtype=pl.Utf8())
-
-            metadata = {}
-
-            for colname in batch.columns:
-                if colname not in known_columns:
-                    metadata[colname] = pl.col(colname)
-
-            metadata = transform_metadata(metadata, metadata_columns)
-
-            event_data = (
-                batch.select(
-                    patient_id=patient_id,
-                    time=time,
-                    code=code,
-                    text_value=text_value,
-                    numeric_value=numeric_value,
-                    datetime_value=datetime_value,
-                    metadata=metadata,
-                    shard=patient_id.hash(213345) % num_shards,
-                )
-                .collect()
-                .partition_by("shard", as_dict=True, maintain_order=False)
-            )
-
-            for shard_index, shard in event_data.items():
-                verify_shard(shard, event_file)
-                cleaned_event_file = os.path.basename(event_file).split(".")[0]
-                fname = os.path.join(temp_dir, str(shard_index), f"{cleaned_event_file}_{batch_index}.parquet")
-                shard.write_parquet(fname, compression="uncompressed")
+            create_and_write_shards_from_table(batch, temp_dir, num_shards, time_formats, metadata_columns, fname)
 
 
 def convert_flat_to_meds(
@@ -349,7 +319,9 @@ def convert_flat_to_meds(
         os.mkdir(os.path.join(temp_dir, str(shard_index)))
 
     if os.path.exists(os.path.join(source_flat_path, "metadata.json")):
-        shutil.copyfile(os.path.join(source_flat_path, "metadata.json"), os.path.join(target_meds_path, "metadata.json"))
+        shutil.copyfile(
+            os.path.join(source_flat_path, "metadata.json"), os.path.join(target_meds_path, "metadata.json")
+        )
 
     csv_tasks = []
     parquet_tasks = []
@@ -375,7 +347,7 @@ def convert_flat_to_meds(
             for columns in pool.imap_unordered(get_parquet_columns, parquet_tasks):
                 metadata_columns_set |= columns
 
-            metadata_columns_set -= known_columns
+            metadata_columns_set -= KNOWN_COLUMNS
             metadata_columns = sorted(list(metadata_columns_set))
 
             csv_processor = functools.partial(
@@ -406,7 +378,7 @@ def convert_flat_to_meds(
         for task in parquet_tasks:
             metadata_columns_set |= get_parquet_columns(task)
 
-        metadata_columns_set -= known_columns
+        metadata_columns_set -= KNOWN_COLUMNS
         metadata_columns = sorted(list(metadata_columns_set))
 
         csv_processor = functools.partial(

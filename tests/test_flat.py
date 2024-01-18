@@ -19,6 +19,7 @@ def get_random_patient(patient_id: int, include_metadata=True) -> meds.Patient:
     epoch = datetime.datetime(1990, 1, 1)
     birth = epoch + datetime.timedelta(days=random.randint(100, 1000))
     current_date = birth
+    random.seed(patient_id)
 
     gender = "Gender/" + random.choice(["F", "M"])
     race = "Race/" + random.choice(["White", "Non-White"])
@@ -104,11 +105,11 @@ def create_dataset(tmp_path: pathlib.Path, include_metadata=True):
     return patients, patient_schema
 
 
-def roundrip_helper(tmp_path: pathlib.Path, patients: List[meds.Patient], format: meds_etl.flat.Format, num_proc: int):
+def roundtrip_helper(tmp_path: pathlib.Path, patients: List[meds.Patient], format: meds_etl.flat.Format, num_proc: int):
     print("Testing", format)
     meds_dataset = tmp_path / "meds"
-    meds_flat_dataset = tmp_path / ("meds_flat_" + format + "_" + str(num_proc))
-    meds_dataset2 = tmp_path / ("meds2_" + format + "_" + str(num_proc))
+    meds_flat_dataset = tmp_path / f"meds_flat_{format}_{num_proc}"
+    meds_dataset2 = tmp_path / f"meds2_{format}_{num_proc}"
 
     meds_etl.flat.convert_meds_to_flat(str(meds_dataset), str(meds_flat_dataset), num_proc=num_proc, format=format)
 
@@ -130,13 +131,13 @@ def test_roundtrip(tmp_path: pathlib.Path):
     patients = pq.read_table(meds_dataset / "data" / "patients.parquet").to_pylist()
     patients.sort(key=lambda a: a["patient_id"])
 
-    roundrip_helper(tmp_path, patients, "csv", 1)
-    roundrip_helper(tmp_path, patients, "compressed_csv", 1)
-    roundrip_helper(tmp_path, patients, "parquet", 1)
+    roundtrip_helper(tmp_path, patients, "csv", 1)
+    roundtrip_helper(tmp_path, patients, "compressed_csv", 1)
+    roundtrip_helper(tmp_path, patients, "parquet", 1)
 
-    roundrip_helper(tmp_path, patients, "csv", 4)
-    roundrip_helper(tmp_path, patients, "compressed_csv", 4)
-    roundrip_helper(tmp_path, patients, "parquet", 4)
+    roundtrip_helper(tmp_path, patients, "csv", 4)
+    roundtrip_helper(tmp_path, patients, "compressed_csv", 4)
+    roundtrip_helper(tmp_path, patients, "parquet", 4)
 
 
 def test_roundtrip_no_metadata(tmp_path: pathlib.Path):
@@ -145,13 +146,13 @@ def test_roundtrip_no_metadata(tmp_path: pathlib.Path):
     patients = pq.read_table(meds_dataset / "data" / "patients.parquet").to_pylist()
     patients.sort(key=lambda a: a["patient_id"])
 
-    roundrip_helper(tmp_path, patients, "csv", 1)
-    roundrip_helper(tmp_path, patients, "compressed_csv", 1)
-    roundrip_helper(tmp_path, patients, "parquet", 1)
+    roundtrip_helper(tmp_path, patients, "csv", 1)
+    roundtrip_helper(tmp_path, patients, "compressed_csv", 1)
+    roundtrip_helper(tmp_path, patients, "parquet", 1)
 
-    roundrip_helper(tmp_path, patients, "csv", 4)
-    roundrip_helper(tmp_path, patients, "compressed_csv", 4)
-    roundrip_helper(tmp_path, patients, "parquet", 4)
+    roundtrip_helper(tmp_path, patients, "csv", 4)
+    roundtrip_helper(tmp_path, patients, "compressed_csv", 4)
+    roundtrip_helper(tmp_path, patients, "parquet", 4)
 
 
 def test_shuffle(tmp_path: pathlib.Path):

@@ -12,7 +12,7 @@ This package library currently supports:
 
 In order to run the MIMIC-IV ETL, simply run the following command:
 
-`meds_etl_mimic mimiciv mimiciv_meds` where mimiciv is a download of MIMIC-IV and mimiciv-esds will be the destination path for the dataset.
+`meds_etl_mimic mimiciv mimiciv_meds` where mimiciv is a download of MIMIC-IV and mimiciv_meds will be the destination path for the dataset.
 
 ## OMOP
 
@@ -43,13 +43,13 @@ The MEDS schema can be a bit tricky to use as it is a nested parquet schema and 
 
 In order to make things simpler for users, this package provides a special MEDS Flat schema and ETLs that transform between MEDS Flat and MEDS.
 
-MEDS Flat schema is a flattened version of MEDS. MEDS Flat data consists of a folder with a metadata.json file (from the [MEDS metadata schema](https://github.com/Medical-Event-Data-Standard/meds/blob/main/src/meds/__init__.py#L99)) and a "flat_data" folder with MEDS Flat data files. MEDS Flat data files must be either csvs (optionally gzipped) or parquet files that contain three core columns: "patient_id", "time", and "code". These columns correspond to the core MEDS columns. In addition, "datetime_value", "numeric_value" and/or "text_value" can be provided to match those columns in MEDS. Alternatively, a single "value" column can be provided, which will then be transformed into  "datetime_value", "numeric_value" and "text_value" as appropriate. 
+MEDS Flat schema is a flattened version of MEDS. MEDS Flat data consists of a folder with a metadata.json file (from the [MEDS metadata schema](https://github.com/Medical-Event-Data-Standard/meds/blob/main/src/meds/__init__.py#L99)) and a "flat_data" folder with MEDS Flat data files. MEDS Flat data files must be either csvs (optionally gzipped) or parquet files that contain three core columns: "patient_id", "time", and "code". These columns correspond to the core MEDS columns. In addition, "datetime_value", "numeric_value" and/or "text_value" can be provided to match those columns in MEDS. Alternatively, a single "value" column can be provided, which will then be transformed into  "datetime_value", "numeric_value" and "text_value" as appropriate.
 
 Arbitrary additional columns can be added, each of which will become MEDS metadata columns.
 
-In order to convert a MEDS Flat dataset into MEDS, simple run the following command:
+In order to convert a MEDS Flat dataset into MEDS, simply run the following command:
 
-`meds_etl_flat flat flat_meds` where flat is a folder containing MEDS Flat data and `flat_meds` is the target folder to store the results in.
+`meds_etl_from_flat meds_flat meds` where meds_flat is a folder containing MEDS Flat data and `meds` is the target folder to store the MEDS dataset in.
 
 For example, the following CSV would be converted into the following MEDS patient:
 
@@ -65,7 +65,7 @@ patient_id,time,code,text_value,numeric_value,datetime_value,arbitrary_metadata_
 Output MEDS Patient:
 ```
 {
-  'person_id': 100,
+  'patient_id': 100,
   'events': [
     {
       'time': 1990-11-30,
@@ -81,3 +81,9 @@ Output MEDS Patient:
     },
   ]
 }
+
+We also support a reverse ETL, converting from MEDS to MEDS Flat.
+
+The command for this is `meds_etl_to_flat`. For example:
+
+`meds_etl_to_flat meds meds_flat` where meds is a folder containing a MEDS dataset and meds_flat is the folder that will store the resulting MEDS Flat dataset.
