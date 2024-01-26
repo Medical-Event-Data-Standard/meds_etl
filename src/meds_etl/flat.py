@@ -238,7 +238,7 @@ def create_and_write_shards_from_table(
             shard=patient_id.hash(213345) % num_shards,
         )
         .collect()
-        .partition_by("shard", as_dict=True, maintain_order=False)
+        .partition_by(["shard"], as_dict=True, maintain_order=False)
     )
 
     for shard_index, shard in event_data.items():
