@@ -66,7 +66,9 @@ def convert_meds_to_flat(
     tasks = [os.path.join(source_meds_data_path, source_file) for source_file in source_files]
 
     if os.path.exists(os.path.join(source_meds_path, "metadata.json")):
-        shutil.copyfile(os.path.join(source_meds_path, "metadata.json"), os.path.join(target_flat_path, "metadata.json"))
+        shutil.copyfile(
+            os.path.join(source_meds_path, "metadata.json"), os.path.join(target_flat_path, "metadata.json")
+        )
 
     target_flat_data_path = os.path.join(target_flat_path, "flat_data")
     os.mkdir(target_flat_data_path)
@@ -241,6 +243,11 @@ def process_csv_file(
     time_formats: Iterable[str],
     metadata_columns: List[str],
 ):
+    """
+    consider requiring columns "text_value", "numeric_value", and "datetime_value", rather than interpreting these dynamically.
+
+    it's a bit difficult to interpret the logic here.
+    """
     logging.info("Working on ", event_file)
 
     with load_file(decompressed_dir, event_file) as temp_f:
@@ -349,7 +356,9 @@ def convert_flat_to_meds(
         os.mkdir(os.path.join(temp_dir, str(shard_index)))
 
     if os.path.exists(os.path.join(source_flat_path, "metadata.json")):
-        shutil.copyfile(os.path.join(source_flat_path, "metadata.json"), os.path.join(target_meds_path, "metadata.json"))
+        shutil.copyfile(
+            os.path.join(source_flat_path, "metadata.json"), os.path.join(target_meds_path, "metadata.json")
+        )
 
     csv_tasks = []
     parquet_tasks = []
@@ -434,7 +443,7 @@ def convert_flat_to_meds(
 
     logging.info("Processing each shard")
 
-    data_dir = os.path.join(target_meds_path, "data")
+    data_dir = os.path.join(target_meds_path, "meds_data")
     os.mkdir(data_dir)
 
     for shard_index in range(num_shards):
