@@ -18,8 +18,14 @@ import meds
 import polars as pl
 import pyarrow as pa
 import pyarrow.parquet as pq
+import sys
 
-mp = multiprocessing.get_context("forkserver")
+# mp = multiprocessing.set_start_method("spawn")
+if sys.platform == "win32":
+    # Windows does not support fork, so we need to use spawn
+    mp = multiprocessing.set_start_method("spawn")
+else:
+    mp = multiprocessing.get_context("forkserver")
 
 Format = Literal["csv", "parquet", "compressed_csv"]
 KNOWN_COLUMNS = {"patient_id", "numeric_value", "datetime_value", "text_value", "value", "time", "code"}
