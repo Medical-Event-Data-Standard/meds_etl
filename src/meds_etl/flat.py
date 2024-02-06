@@ -244,8 +244,6 @@ def create_and_write_shards_from_table(
         .partition_by(["shard"], as_dict=True, maintain_order=False)
     )
 
-    print(event_data)
-
     for (shard_index,), shard in event_data.items():
         verify_shard(shard, filename)
 
