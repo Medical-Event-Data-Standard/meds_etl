@@ -184,8 +184,8 @@ def test_shuffle(tmp_path: pathlib.Path):
     for a in range(num_parts):
         r = rows[a * rows_per_part : (a + 1) * rows_per_part]
         with open(tmp_path / "meds_flat" / "flat_data" / (str(a) + ".csv"), "w") as f:
-            f.write(header + "\n")
-            f.write("\n".join(r))
+            f.write(header)
+            f.write("".join(r))
 
     meds_dataset2 = tmp_path / "meds2"
 

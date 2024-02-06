@@ -20,6 +20,9 @@ import pyarrow as pa
 import pyarrow.parquet as pq
 
 mp = multiprocessing.get_context("forkserver")
+if mp is None:
+    # Could not get forkserver, just use the default
+    mp = multiprocessing.get_context()
 
 Format = Literal["csv", "parquet", "compressed_csv"]
 KNOWN_COLUMNS = {"patient_id", "numeric_value", "datetime_value", "text_value", "value", "time", "code"}
@@ -238,10 +241,12 @@ def create_and_write_shards_from_table(
             shard=patient_id.hash(213345) % num_shards,
         )
         .collect()
-        .partition_by("shard", as_dict=True, maintain_order=False)
+        .partition_by(["shard"], as_dict=True, maintain_order=False)
     )
 
-    for shard_index, shard in event_data.items():
+    print(event_data)
+
+    for (shard_index,), shard in event_data.items():
         verify_shard(shard, filename)
 
         fname = os.path.join(temp_dir, str(shard_index), filename)
