@@ -10,8 +10,8 @@ readme = "README.md"
 license = {text = "Apache-2.0"}
 
 dependencies = [
-    "pyarrow >= 12",
-    "polars >= 0.19",
+    "pyarrow >= 8",
+    "polars >= 0.20.10",
     "jsonschema >= 4.0.0",
     "meds == 0.1.1",
     "typing_extensions >= 4.0",
