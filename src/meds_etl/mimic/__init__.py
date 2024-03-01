@@ -8,9 +8,9 @@ from importlib.resources import files
 import jsonschema
 import meds
 import polars as pl
-import pyarrow.parquet as pq
 
 import meds_etl
+import meds_etl.flat
 
 MIMIC_VERSION = "2.2"
 
@@ -313,8 +313,6 @@ def main():
         },
     }
 
-    events = []
-
     admission_table = pl.read_csv(
         os.path.join(src_mimic_version, "hosp", "admissions" + ".csv.gz"), infer_schema_length=0
     ).lazy()
@@ -325,8 +323,7 @@ def main():
     temp_dir = os.path.join(args.destination, "temp")
     os.mkdir(temp_dir)
 
-    for shard_index in range(args.num_shards):
-        os.mkdir(os.path.join(temp_dir, str(shard_index)))
+    os.mkdir(os.path.join(temp_dir, "flat_data"))
 
     print("Processing tables into " + temp_dir)
 
@@ -353,39 +350,16 @@ def main():
 
             patient_id = pl.col("subject_id").cast(pl.Int64)
             time = mapping_code["time"]
-            time = pl.coalesce(
-                time.str.to_datetime("%Y-%m-%d %H:%M:%S%.f", strict=False),
-                time.str.to_datetime("%Y-%m-%d", strict=False).dt.offset_by("1d").dt.offset_by("-1s"),
-            )
             code = mapping_code["code"]
             if "value" in mapping_code:
                 value = mapping_code["value"]
-
-                datetime_value = pl.coalesce(
-                    value.str.to_datetime("%Y-%m-%d %H:%M:%S%.f", strict=False),
-                    value.str.to_datetime("%Y-%m-%d", strict=False),
-                )
-                numeric_value = value.cast(pl.Float32, strict=False)
-                text_value = (
-                    pl.when(datetime_value.is_null() & numeric_value.is_null() & (value != pl.lit("")))
-                    .then(value)
-                    .otherwise(pl.lit(None, dtype=str))
-                )
-
             else:
-                datetime_value = pl.lit(None, dtype=pl.Datetime)
-                numeric_value = pl.lit(None, dtype=pl.Float32)
-                text_value = pl.lit(None, dtype=str)
+                value = pl.lit(None, dtype=str)
 
             if "metadata" not in mapping_code:
                 mapping_code["metadata"] = {}
 
             mapping_code["metadata"]["table"] = pl.lit(table_name)
-
-            def transform_metadata(d):
-                return pl.struct([v.alias(k) for k, v in d.items()])
-
-            metadata = transform_metadata(mapping_code["metadata"])
 
             batch_index = 0
             while True:
@@ -405,26 +379,22 @@ def main():
                 if mapping_code.get("possibly_null_time", False):
                     table_csv = table_csv.filter(time.is_not_null())
 
-                event_data = (
-                    table_csv.select(
-                        patient_id=patient_id,
-                        time=time,
-                        code=code,
-                        text_value=text_value,
-                        numeric_value=numeric_value,
-                        datetime_value=datetime_value,
-                        metadata=metadata,
-                        shard=patient_id.hash(213345) % args.num_shards,
-                    )
-                    .collect()
-                    .partition_by("shard", as_dict=True, maintain_order=False)
-                )
+                columns = {
+                    "patient_id": patient_id,
+                    "time": time,
+                    "code": code,
+                    "value": value,
+                }
 
-                for shard_index, shard in event_data.items():
-                    fname = os.path.join(
-                        temp_dir, str(shard_index), f'{table_name.replace("/", "_")}_{map_index}_{batch_index}.parquet'
-                    )
-                    shard.write_parquet(fname, compression="uncompressed")
+                for k, v in mapping_code["metadata"].items():
+                    columns[k] = v.alias(k)
+
+                event_data = table_csv.select(**columns).collect()
+
+                fname = os.path.join(
+                    temp_dir, "flat_data", f'{table_name.replace("/", "_")}_{map_index}_{batch_index}.parquet'
+                )
+                event_data.write_parquet(fname)
 
         os.remove(uncompressed_path)
 
@@ -432,62 +402,11 @@ def main():
 
     print("Processing each shard")
 
-    data_dir = os.path.join(args.destination, "data")
-    os.mkdir(data_dir)
-
-    for shard_index in range(args.num_shards):
-        print("Processing shard ", shard_index)
-        shard_dir = os.path.join(temp_dir, str(shard_index))
-
-        events = [pl.scan_parquet(os.path.join(shard_dir, a)) for a in os.listdir(shard_dir)]
-
-        all_events = pl.concat(events, how="diagonal_relaxed")
-
-        for important_column in ("patient_id", "time", "code"):
-            rows_with_invalid_code = all_events.filter(pl.col(important_column).is_null()).collect()
-            if len(rows_with_invalid_code) != 0:
-                print("Have rows with invalid " + important_column)
-                for row in rows_with_invalid_code:
-                    print(row)
-                raise ValueError("Cannot have rows with invalid " + important_column)
-
-        measurement = pl.struct(
-            code=pl.col("code"),
-            text_value=pl.col("text_value"),
-            numeric_value=pl.col("numeric_value"),
-            datetime_value=pl.col("datetime_value"),
-            metadata=pl.col("metadata"),
-        )
-
-        grouped_by_time = all_events.groupby("patient_id", "time").agg(measurements=measurement)
-
-        event = pl.struct(
-            pl.col("time"),
-            pl.col("measurements"),
-        )
-
-        grouped_by_patient = grouped_by_time.groupby("patient_id").agg(events=event.sort_by(pl.col("time")))
-
-        # We now have our data in the final form, grouped_by_patient, but we have to do one final transformation
-        # We have to convert from polar's large_list to list because large_list is not supported by huggingface
-
-        # We do this conversion using the pyarrow library
-
-        # Save and load our data in order to convert to pyarrow library
-        converted = grouped_by_patient.collect().to_arrow()
-
-        # Now we need to reconstruct the schema
-        # We do this by pulling the metadata schema and then using meds.patient_schema
-        event_schema = converted.schema.field("events").type.value_type
-        measurement_schema = event_schema.field("measurements").type.value_type
-        metadata_schema = measurement_schema.field("metadata").type
-
-        desired_schema = meds.patient_schema(metadata_schema)
-
-        # All the larg_lists are now converted to lists, so we are good to load with huggingface
-        casted = converted.cast(desired_schema)
-
-        pq.write_table(casted, os.path.join(data_dir, f"data_{shard_index}.parquet"))
+    meds_etl.flat.convert_flat_to_meds(
+        temp_dir, os.path.join(args.destination, "result"), num_shards=args.num_shards, num_proc=1
+    )
+    shutil.move(os.path.join(args.destination, "result", "data"), os.path.join(args.destination, "data"))
+    shutil.rmtree(os.path.join(args.destination, "result"))
 
     shutil.rmtree(temp_dir)
 

@@ -41,7 +41,7 @@ class TestMimicETL:
             shutil.rmtree(cls.destination_path)
 
         # Run the ETL
-        subprocess.run(["meds_etl_mimic", cls.source_path, cls.destination_path, "--num_shards", "10"], check=True)
+        subprocess.run(["meds_etl_mimic", cls.source_path, cls.destination_path], check=True)
 
         # Initialize the dataset variable. Set it in the test_load_dataset method
         cls.dataset = None
