@@ -12,6 +12,7 @@ import jsonschema
 import meds
 import polars as pl
 import pyarrow.parquet as pq
+from tqdm import tqdm
 
 import meds_etl
 
@@ -33,7 +34,16 @@ def get_table_files(src_omop, table_name, table_details={}):
         return []
 
 
-def load_file(decompressed_dir, fname):
+def load_file(decompressed_dir: str, fname: str):
+    """Load a file from disk, unzip into temporary decompressed directory if needed
+
+    Args: 
+        decompressed_dir (str): Path where temporary decompressed file should be stored
+        fname (str): Path to the file that should be loaded from disk
+
+    Returns:
+        Opened file object
+    """
     if fname.endswith(".gz"):
         file = tempfile.NamedTemporaryFile(dir=decompressed_dir)
         subprocess.run(["gunzip", "-c", fname], stdout=file)
@@ -53,10 +63,12 @@ def process_table(args):
         temp_dir,
         decompressed_dir,
         index,
+        verbose
     ) = args
-    concept_id_map = pickle.loads(concept_id_map_data)
-    concept_name_map = pickle.loads(concept_name_map_data)
-    print("Working on ", table_file, table_name, all_table_details)
+    concept_id_map = pickle.loads(concept_id_map_data)  # 0.25 GB for STARR-OMOP
+    concept_name_map = pickle.loads(concept_name_map_data)  # 0.5GB for STARR-OMOP
+    if verbose:
+        print("Working on ", table_file, table_name, all_table_details)
 
     if not isinstance(all_table_details, list):
         all_table_details = [all_table_details]
@@ -69,7 +81,7 @@ def process_table(args):
         while True:
             batch_index += 1
 
-            batch = table.next_batches(1)
+            batch = table.next_batches(1)  # Returns a list of length 1 containing a table for the batch
             if batch is None:
                 break
 
@@ -78,9 +90,12 @@ def process_table(args):
             batch = batch.lazy().rename({c: c.lower() for c in batch.columns})
 
             for i, table_details in enumerate(all_table_details):
+                if verbose:
+                    print(f"Batch {i}")
                 patient_id = pl.col("person_id").cast(pl.Int64)
 
                 if table_name == "person":
+                    # Take the `birth_datetime` if its available, otherwise construct it from `year`, `month`, `day`
                     time = pl.coalesce(
                         pl.col("birth_datetime").str.to_datetime("%Y-%m-%d %H:%M:%S%.f", strict=False, time_unit="ms"),
                         pl.datetime(
@@ -90,12 +105,17 @@ def process_table(args):
                         ),
                     )
                 else:
+                    # Use `_start_datetime` as `time` column, otherwise `_start_date`, `_datetime`, `_date` 
+                    # in order of preference
                     options = ["_start_datetime", "_start_date", "_datetime", "_date"]
                     options = [
                         pl.col(table_name + option) for option in options if table_name + option in batch.columns
                     ]
                     assert len(options) > 0, f"Could not find the time column {batch.columns}"
                     time = pl.coalesce(options)
+
+                    # Try to cast time to a datetime but if only the date is available, then use
+                    # that date with a timestamp of 23:59:59
                     time = pl.coalesce(
                         time.str.to_datetime("%Y-%m-%d %H:%M:%S%.f", strict=False, time_unit="ms"),
                         time.str.to_datetime("%Y-%m-%d", strict=False, time_unit="ms")
@@ -104,15 +124,21 @@ def process_table(args):
                     )
 
                 if table_details.get("force_concept_id"):
+                    # Rather than getting the concept ID from the table, we use the concept ID
+                    # passed in by the user eg `4083587` for `Birth`
                     concept_id = pl.lit(table_details["force_concept_id"], dtype=pl.Int64)
                     source_concept_id = pl.lit(0, dtype=pl.Int64)
                 else:
+                    # Try using the source concept ID, but if it's not available then use the concept ID 
                     concept_id_field = table_details.get("concept_id_field", table_name + "_concept_id")
                     concept_id = pl.col(concept_id_field).cast(pl.Int64)
-                    source_concept_id = pl.col(concept_id_field.replace("_concept_id", "_source_concept_id")).cast(
-                        pl.Int64
-                    )
-
+                    if concept_id_field.replace("_concept_id", "_source_concept_id") in batch.columns:
+                        source_concept_id = pl.col(concept_id_field.replace("_concept_id", "_source_concept_id")).cast(
+                            pl.Int64
+                        )
+                    else:
+                        source_concept_id = pl.lit(0, dtype=pl.Int64)
+                    
                     fallback_concept_id = pl.lit(table_details.get("fallback_concept_id", None), dtype=pl.Int64)
 
                     concept_id = (
@@ -123,6 +149,8 @@ def process_table(args):
                         .otherwise(fallback_concept_id)
                     )
 
+                # Replace values in `concept_id` with the normalized concepts to which they are mapped
+                # based on the `concept_id_map`
                 code = concept_id.map_dict(concept_id_map)
 
                 value = pl.lit(None, dtype=str)
@@ -207,6 +235,7 @@ def process_table(args):
 
                 batch = batch.filter(code.is_not_null())
 
+                # Map each row to a shard based on the corresponding patient_id hash
                 event_data = (
                     batch.select(
                         patient_id=patient_id,
@@ -222,6 +251,7 @@ def process_table(args):
                     .partition_by("shard", as_dict=True, maintain_order=False)
                 )
 
+                # Write each shard to disk
                 for shard_index, shard in event_data.items():
                     fname = os.path.join(
                         temp_dir, str(shard_index), f'{table_name.replace("/", "_")}_{index}_{batch_index}_{i}.parquet'
@@ -235,6 +265,7 @@ def main():
     parser.add_argument("destination", type=str)
     parser.add_argument("--num_shards", type=int, default=100)
     parser.add_argument("--num_proc", type=int, default=1)
+    parser.add_argument("--verbose", type=int, default=0)
     args = parser.parse_args()
 
     if not os.path.exists(args.src_omop):
@@ -250,6 +281,7 @@ def main():
     temp_dir = os.path.join(args.destination, "temp")
     os.mkdir(temp_dir)
 
+    # Make a folder in temp_dir for each shard
     for shard_index in range(args.num_shards):
         os.mkdir(os.path.join(temp_dir, str(shard_index)))
 
@@ -258,20 +290,33 @@ def main():
 
     code_metadata = {}
 
-    for concept_file in get_table_files(args.src_omop, "concept"):
+    print("Generating metadata from OMOP `concept` table")
+    for concept_file in tqdm(get_table_files(args.src_omop, "concept")):
+        if args.verbose:
+            print(concept_file)
         with load_file(decompressed_dir, concept_file) as f:
-            concept = pl.read_csv(f.name)
+            # Read the contents of the `concept` table shard
+            concept: pl.DataFrame = pl.read_csv(f.name)
             concept_id = pl.col("concept_id").cast(pl.Int64)
             code = pl.col("vocabulary_id") + "/" + pl.col("concept_code")
+
+            # Convert the table into a dictionary
             result = concept.select(concept_id=concept_id, code=code, name=pl.col("concept_name")).to_dict(
                 as_series=False
             )
+
+            # Update our running dictionary with the concepts we read in from 
+            # the concept table shard
             concept_id_map |= dict(zip(result["concept_id"], result["code"]))
             concept_name_map |= dict(zip(result["concept_id"], result["name"]))
 
+            # Assuming custom concepts have concept_id > 2000000000 we create a
+            # record for them in `code_metadata` with no parent codes. Such a
+            # custom code could be eg `STANFORD_RACE/Black or African American`
+            # with `concept_id` 2000039197
             custom_concepts = (
                 concept.filter(concept_id > 2_000_000_000)
-                .select(code=code, description=pl.col("concept_name"))
+                .select(concept_id=concept_id, code=code, description=pl.col("concept_name"))
                 .to_dict()
             )
             for i in range(len(custom_concepts["code"])):
@@ -279,17 +324,21 @@ def main():
                     "description": custom_concepts["description"][i],
                     "parent_codes": [],
                 }
+
+    # Find and store the Concept ID's used for Birth and Death
     omop_birth = None
     omop_death = None
-
     for concept_id, code in concept_id_map.items():
         if code == meds.birth_code:
             omop_birth = concept_id
         elif code == meds.death_code:
             omop_death = concept_id
 
+    # Include map from custom concepts to normalized (ie standard ontology) 
+    # parent concepts, where possible, in the code_metadata dictionary
     for concept_relationship_file in get_table_files(args.src_omop, "concept_relationship"):
         with load_file(decompressed_dir, concept_relationship_file) as f:
+            # This table has `concept_id_1`, `concept_id_2`, `relationship_id` columns
             concept_relationship = pl.read_csv(f.name)
 
             concept_id_1 = pl.col("concept_id_1").cast(pl.Int64)
@@ -311,6 +360,7 @@ def main():
                 if concept_id_1 in concept_id_map and concept_id_2 in concept_id_map:
                     code_metadata[concept_id_map[concept_id_1]]["parent_codes"].append(concept_id_map[concept_id_2])
 
+    # Extract dataset metadata ie the CDM source name and its release date
     datasets = []
     dataset_versions = []
     for cdm_source_file in get_table_files(args.src_omop, "cdm_source"):
@@ -323,12 +373,17 @@ def main():
             dataset_versions.extend(cdm_source["cdm_release_date"])
 
     metadata = {
-        "dataset_name": "|".join(datasets),
-        "dataset_version": "|".join(dataset_versions),
+        "dataset_name": "|".join(datasets),  # eg 'Epic Clarity SHC|Epic Clarity LPCH'
+        "dataset_version": "|".join(dataset_versions),  # eg '2024-02-01|2024-02-01'
         "etl_name": "meds_etl.omop",
         "etl_version": meds_etl.__version__,
         "code_metadata": code_metadata,
     }
+    # At this point metadata['code_metadata']['STANFORD_MEAS/AMOXICILLIN/CLAVULANATE']
+    # should give a dictionary like
+    # {'description': 'AMOXICILLIN/CLAVULANATE', 'parent_codes': ['LOINC/18862-3']}
+    # where LOINC Code '18862-3' is a standard concept representing a lab test 
+    # measurement determining microorganism susceptibility to Amoxicillin+clavulanic acid
 
     jsonschema.validate(instance=metadata, schema=meds.dataset_metadata)
 
@@ -363,10 +418,10 @@ def main():
             "force_concept_id": omop_death,
         },
         "procedure": {
-            "file_suffix": "occurrence",
+           "file_suffix": "occurrence",
         },
         "device_exposure": {
-            "concept_id_field": "device_concept_id",
+           "concept_id_field": "device_concept_id",
         },
         "measurement": {
             "string_value_field": "value_source_value",
@@ -387,10 +442,12 @@ def main():
             "fallback_concept_id": 4203722,
         },
     }
-
+    
+    # Prepare concept_id_map and concept_name_map for parallel processing
     concept_id_map_data = pickle.dumps(concept_id_map)
     concept_name_map_data = pickle.dumps(concept_name_map)
 
+    # Create a separate task for each table
     for table_name, table_details in tables.items():
         table_files = get_table_files(
             args.src_omop, table_name, table_details[0] if isinstance(table_details, list) else table_details
@@ -407,6 +464,7 @@ def main():
                 temp_dir,
                 decompressed_dir,
                 i,
+                args.verbose
             )
             for i, table_file in enumerate(table_files)
         )
@@ -414,23 +472,29 @@ def main():
     random.seed(3422342)
     random.shuffle(all_tasks)
 
+    print("Decompressing OMOP tables, mapping to MEDS, sharding by patient ID, writing to disk...")
     if True:
         with multiprocessing.get_context("spawn").Pool(args.num_proc) as pool:
-            for _ in pool.imap_unordered(process_table, all_tasks):
-                pass
+            # Wrap all tasks with tqdm for a progress bar
+            total_tasks = len(all_tasks)
+            with tqdm(total=total_tasks) as pbar:
+                for _ in pool.imap_unordered(process_table, all_tasks):
+                    pbar.update()
+
     else:
         for task in all_tasks[:100]:
             process_table(task)
 
     shutil.rmtree(decompressed_dir)
 
-    print("Processing each shard")
+    print("Joining across tables for each patient shard...")
 
     data_dir = os.path.join(args.destination, "data")
     os.mkdir(data_dir)
 
-    for shard_index in range(args.num_shards):
-        print("Processing shard ", shard_index)
+    for shard_index in tqdm(range(args.num_shards), total=args.num_shards):
+        if args.verbose:
+            print("Processing shard ", shard_index)
         shard_dir = os.path.join(temp_dir, str(shard_index))
 
         events = [pl.scan_parquet(os.path.join(shard_dir, a)) for a in os.listdir(shard_dir)]
