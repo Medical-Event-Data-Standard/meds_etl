@@ -259,6 +259,84 @@ def process_table(args):
                     shard.write_parquet(fname, compression="uncompressed")
 
 
+def process_shard(args: tuple[int, str, str]):
+    """Collect measurements across OMOP table shards into MEDS patient timelines
+
+    Args:
+        args (tuple): A tuple which contains the following positional variables:
+            shard_index (int): The shard index to which a subset of patient ID's are mapped,
+                used in `temp_dir` (see  below)
+            temp_dir (str): Path to the directory where sharded patient measurements are stored.
+                Measurements will be *read* from files in the shard subfolders in this directory.
+            data_dir (str): Path to the directory where MEDS timelines should be *written*.
+                See below for expected file naming convention.
+
+    Returns:
+        Nothing, but MEDS timelines for the given `shard_index` are written 
+        to "{data_dir}/data_{shard_index}.parquet" and can be read in eg
+        as HuggingFace datasets.
+
+    Raises:
+        ValueError: If any columns 
+    """
+    shard_index, temp_dir, data_dir = args
+    shard_dir = os.path.join(temp_dir, str(shard_index))
+
+    # (Lazily) concatenate all OMOP table entries for the patients represented in the patient shard
+    events = [pl.scan_parquet(os.path.join(shard_dir, a)) for a in os.listdir(shard_dir)]
+    all_events = pl.concat(events, how="diagonal_relaxed")
+
+    # Verify that all important columns have no null entries
+    for important_column in ("patient_id", "time", "code"):
+        rows_with_invalid_code = all_events.filter(pl.col(important_column).is_null()).collect()
+        if len(rows_with_invalid_code) != 0:
+            print("Have rows with invalid " + important_column)
+            for row in rows_with_invalid_code:
+                print(row)
+            raise ValueError("Cannot have rows with invalid " + important_column)
+
+    # Aggregate measurements into events (lazy, not executed until `collect()`)
+    measurement = pl.struct(
+        code=pl.col("code"),
+        text_value=pl.col("text_value"),
+        numeric_value=pl.col("numeric_value"),
+        datetime_value=pl.col("datetime_value"),
+        metadata=pl.col("metadata"),
+    )
+
+    grouped_by_time = all_events.groupby("patient_id", "time").agg(measurements=measurement)
+
+    # Aggregate events into patient timelines (lazy, not executed until `collect()`)
+    event = pl.struct(
+        pl.col("time"),
+        pl.col("measurements"),
+    )
+
+    grouped_by_patient = grouped_by_time.groupby("patient_id").agg(events=event.sort_by(pl.col("time")))
+
+    # We now have our data in the final form, grouped_by_patient, but we have to do one final transformation
+    # We have to convert from polar's large_list to list because large_list is not supported by huggingface
+
+    # We do this conversion using the pyarrow library
+
+    # Save and load our data in order to convert to pyarrow library
+    converted = grouped_by_patient.collect().to_arrow()
+
+    # Now we need to reconstruct the schema
+    # We do this by pulling the metadata schema and then using meds.patient_schema
+    event_schema = converted.schema.field("events").type.value_type
+    measurement_schema = event_schema.field("measurements").type.value_type
+    metadata_schema = measurement_schema.field("metadata").type
+
+    desired_schema = meds.patient_schema(metadata_schema)
+
+    # All the large_lists are now converted to lists, so we are good to load with huggingface
+    casted = converted.cast(desired_schema)
+ 
+    pq.write_table(casted, os.path.join(data_dir, f"data_{shard_index}.parquet"))
+
+
+
 def main():
     parser = argparse.ArgumentParser(prog="meds_etl_omop", description="Performs an ETL from OMOP v5 to MEDS")
     parser.add_argument("src_omop", type=str)
@@ -284,6 +362,10 @@ def main():
     # Make a folder in temp_dir for each shard
     for shard_index in range(args.num_shards):
         os.mkdir(os.path.join(temp_dir, str(shard_index)))
+    
+    # # # # # # # # # # # # # # # # # # # # # # # # # 
+    # Generate metadata.json from OMOP concept table
+    # # # # # # # # # # # # # # # # # # # # # # # # #
 
     concept_id_map = {}
     concept_name_map = {}
@@ -390,7 +472,9 @@ def main():
     with open(os.path.join(args.destination, "metadata.json"), "w") as f:
         json.dump(metadata, f)
 
-    all_tasks = []
+    # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # 
+    # Convert all measurements to MEDS standard, write to shard directory based on patient ID
+    # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # #
 
     tables = {
         "person": [
@@ -448,6 +532,11 @@ def main():
     concept_name_map_data = pickle.dumps(concept_name_map)
 
     # Create a separate task for each table
+    # Each subprocess will read in a decompressed file and put all measurements for a given patient
+    # into that patient's corresponding shard. This makes creating patient timelines downstream
+    # (where timelines incorporate measurements from across different tables) much less RAM
+    # intensive.
+    all_tasks = []
     for table_name, table_details in tables.items():
         table_files = get_table_files(
             args.src_omop, table_name, table_details[0] if isinstance(table_details, list) else table_details
@@ -474,7 +563,7 @@ def main():
 
     print("Decompressing OMOP tables, mapping to MEDS, sharding by patient ID, writing to disk...")
     if True:
-        with multiprocessing.get_context("spawn").Pool(args.num_proc) as pool:
+        with multiprocessing.get_context("spawn").Pool(args.num_proc, maxtasksperchild=1) as pool:
             # Wrap all tasks with tqdm for a progress bar
             total_tasks = len(all_tasks)
             with tqdm(total=total_tasks) as pbar:
@@ -485,66 +574,25 @@ def main():
         for task in all_tasks[:100]:
             process_table(task)
 
+    # Do we need to do this more often so as to reduce maximum disk storage?
     shutil.rmtree(decompressed_dir)
 
     print("Joining across tables for each patient shard...")
 
+    # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # #
+    # Collate measurements into timelines for each patient, by shard
+    # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # #
+
     data_dir = os.path.join(args.destination, "data")
     os.mkdir(data_dir)
 
-    for shard_index in tqdm(range(args.num_shards), total=args.num_shards):
-        if args.verbose:
-            print("Processing shard ", shard_index)
-        shard_dir = os.path.join(temp_dir, str(shard_index))
+    timeline_creation_task_args = []
+    for shard_index in range(args.num_shards):
+        timeline_creation_task_args.append((shard_index, temp_dir, data_dir))
 
-        events = [pl.scan_parquet(os.path.join(shard_dir, a)) for a in os.listdir(shard_dir)]
-
-        all_events = pl.concat(events, how="diagonal_relaxed")
-
-        for important_column in ("patient_id", "time", "code"):
-            rows_with_invalid_code = all_events.filter(pl.col(important_column).is_null()).collect()
-            if len(rows_with_invalid_code) != 0:
-                print("Have rows with invalid " + important_column)
-                for row in rows_with_invalid_code:
-                    print(row)
-                raise ValueError("Cannot have rows with invalid " + important_column)
-
-        measurement = pl.struct(
-            code=pl.col("code"),
-            text_value=pl.col("text_value"),
-            numeric_value=pl.col("numeric_value"),
-            datetime_value=pl.col("datetime_value"),
-            metadata=pl.col("metadata"),
-        )
-
-        grouped_by_time = all_events.groupby("patient_id", "time").agg(measurements=measurement)
-
-        event = pl.struct(
-            pl.col("time"),
-            pl.col("measurements"),
-        )
-
-        grouped_by_patient = grouped_by_time.groupby("patient_id").agg(events=event.sort_by(pl.col("time")))
-
-        # We now have our data in the final form, grouped_by_patient, but we have to do one final transformation
-        # We have to convert from polar's large_list to list because large_list is not supported by huggingface
-
-        # We do this conversion using the pyarrow library
-
-        # Save and load our data in order to convert to pyarrow library
-        converted = grouped_by_patient.collect().to_arrow()
-
-        # Now we need to reconstruct the schema
-        # We do this by pulling the metadata schema and then using meds.patient_schema
-        event_schema = converted.schema.field("events").type.value_type
-        measurement_schema = event_schema.field("measurements").type.value_type
-        metadata_schema = measurement_schema.field("metadata").type
-
-        desired_schema = meds.patient_schema(metadata_schema)
-
-        # All the large_lists are now converted to lists, so we are good to load with huggingface
-        casted = converted.cast(desired_schema)
-
-        pq.write_table(casted, os.path.join(data_dir, f"data_{shard_index}.parquet"))
+    with multiprocessing.get_context("spawn").Pool(args.num_proc, maxtasksperchild=1) as pool:
+        with tqdm(total=len(timeline_creation_task_args)) as pbar:
+            for _ in pool.imap_unordered(process_shard, timeline_creation_task_args):
+                pbar.update()
 
     shutil.rmtree(temp_dir)
