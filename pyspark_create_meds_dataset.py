@@ -18,6 +18,21 @@ def create_meds_dataset(
     returns:
     - a pyspark DataFrame object in meds format
 
+    NOTE: to convert the returned pyspark dataframe to a huggingface/arrow dataset, use the following:
+
+    ```
+    meds_dataset = create_meds_dataset(
+        spark_session=spark,
+        event_table="schema.event_table",
+        num_patients=None,
+        time_cutoff=None,
+    )
+
+    from datasets import Dataset
+    dataset = Dataset.from_spark(meds_dataset)
+    ```
+
+
     NOTE: This does not use the meds package at all. If the meds schema changes, we will need to update this code.
     TODO: we need to make sure that events are sorted in time.
 
