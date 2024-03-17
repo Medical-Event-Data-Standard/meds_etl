@@ -18,6 +18,7 @@ import meds
 import polars as pl
 import pyarrow as pa
 import pyarrow.parquet as pq
+from tqdm import tqdm
 
 mp = multiprocessing.get_context("forkserver")
 if mp is None:
@@ -370,10 +371,13 @@ def convert_flat_to_meds(
                 metadata_columns=metadata_columns,
             )
 
-            for _ in pool.imap_unordered(csv_processor, csv_tasks):
-                pass
-            for _ in pool.imap_unordered(parquet_processor, parquet_tasks):
-                pass
+            print("Processing MEDS flat files in parallel")
+            with tqdm(total=len(csv_tasks)) as pbar:
+                for _ in pool.imap_unordered(csv_processor, csv_tasks):
+                    pbar.update()
+            with tqdm(total=len(parquet_tasks)) as pbar:
+                for _ in pool.imap_unordered(parquet_processor, parquet_tasks):
+                    pbar.update()
     else:
         metadata_columns_set = set()
         for task in csv_tasks:
@@ -400,9 +404,9 @@ def convert_flat_to_meds(
             metadata_columns=metadata_columns,
         )
 
-        for task in csv_tasks:
+        for task in tqdm(csv_tasks, total=len(csv_tasks)):
             csv_processor(task)
-        for task in parquet_tasks:
+        for task in tqdm(parquet_tasks, total=len(parquet_tasks)):
             parquet_processor(task)
 
     shutil.rmtree(decompressed_dir)
