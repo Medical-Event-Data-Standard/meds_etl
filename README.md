@@ -8,14 +8,12 @@ This package library currently supports:
 - OMOP v5
 - MEDS FLAT, a flat version of MEDS
 ## Setup
-Create an environment of your choice:
-```
-conda create -n meds_etl
-```
+
 Install the package
 ```
-python -m pip install .
+pip install meds_etl
 ```
+
 ## MIMIC-IV
 
 In order to run the MIMIC-IV ETL, simply run the following command:
