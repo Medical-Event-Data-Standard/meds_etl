@@ -462,6 +462,11 @@ def main():
 
         grouped_by_patient = grouped_by_time.groupby("patient_id").agg(events=event.sort_by(pl.col("time")))
 
+        # We need to add a dummy column for static_measurements
+        grouped_by_patient = grouped_by_patient.with_columns(static_measurements=pl.lit(None)).select(
+            ["patient_id", "static_measurements", "events"]
+        )
+
         # We now have our data in the final form, grouped_by_patient, but we have to do one final transformation
         # We have to convert from polar's large_list to list because large_list is not supported by huggingface
 

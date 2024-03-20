@@ -13,7 +13,7 @@ dependencies = [
     "pyarrow >= 8",
     "polars >= 0.20.10",
     "jsonschema >= 4.0.0",
-    "meds == 0.1.1",
+    "meds == 0.1.3",
     "typing_extensions >= 4.0",
     "datasets >= 2.0.0",
 ]
