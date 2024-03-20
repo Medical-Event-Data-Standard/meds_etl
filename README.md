@@ -7,6 +7,7 @@ This package library currently supports:
 - MIMIC-IV
 - OMOP v5
 - MEDS FLAT, a flat version of MEDS
+
 ## Setup
 Create an environment of your choice:
 ```
@@ -16,17 +17,18 @@ Install the package
 ```
 python -m pip install .
 ```
+
 ## MIMIC-IV
 
 In order to run the MIMIC-IV ETL, simply run the following command:
 
-`meds_etl_mimic mimiciv mimiciv_meds` where mimiciv is a download of MIMIC-IV and mimiciv_meds will be the destination path for the dataset.
+`meds_etl_mimic PATH_TO_SOURCE_MIMIC PATH_TO_OUTPUT` where `PATH_TO_SOURCE_MIMIC` is a download of MIMIC-IV and `PATH_TO_OUTPUT` will be the destination path for the MEDS dataset.
 
 ## OMOP
 
 In order to run the OMOP ETL, simply run the following command:
 
-`meds_etl_omop omop omop_meds` where omop is a folder containing csv files (optionally gzipped) for an OMOP dataset. Each table should either be a csv file with the table name (such as person.csv) or a folder with the table name containing csv files.
+`meds_etl_omop PATH_TO_SOURCE_OMOP PATH_TO_OUTPUT` where `PATH_TO_SOURCE_OMOP` is a folder containing csv files (optionally gzipped) for an OMOP dataset and `PATH_TO_OUTPUT` will be the destination path for the MEDS dataset. Each OMOP table should either be a csv file with the table name (such as person.csv) or a folder with the table name containing csv files.
 
 ## Unit tests
 
