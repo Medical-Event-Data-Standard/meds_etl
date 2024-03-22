@@ -22,7 +22,7 @@ In order to run the MIMIC-IV ETL, simply run the following command:
 
 ## OMOP
 
-In order to run the MIMIC-IV ETL, simply run the following command:
+In order to run the OMOP ETL, simply run the following command:
 
 `meds_etl_omop omop omop_meds` where omop is a folder containing csv files (optionally gzipped) for an OMOP dataset. Each table should either be a csv file with the table name (such as person.csv) or a folder with the table name containing csv files.
 
@@ -87,6 +87,7 @@ Output MEDS Patient:
     },
   ]
 }
+```
 
 We also support an inverse ETL, converting from MEDS to MEDS Flat.
 
