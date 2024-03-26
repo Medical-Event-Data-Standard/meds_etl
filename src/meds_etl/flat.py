@@ -33,6 +33,8 @@ def convert_file_to_flat(source_file: str, *, target_flat_data_path: str, format
     """Convert a single MEDS file to MEDS Flat"""
     table = pl.scan_parquet(source_file)
 
+    table = table.drop("static_measurements")
+
     table = table.explode("events")
     table = table.unnest("events")
 
