@@ -66,7 +66,9 @@ def load_file(path_to_decompressed_dir: str, fname: str) -> Any:
     """
     if fname.endswith(".gz"):
         file = tempfile.NamedTemporaryFile(dir=path_to_decompressed_dir)
-        subprocess.run(["gunzip", "-c", fname], stdout=file)
+        result = subprocess.run(["gunzip", "-c", fname], stdout=file)
+        if result.returncode != 0:
+            raise ValueError(f"Failed to decompress the file: `{fname}`. Please double check that the CLI utility `gunzip` is installed.")
         return file
     else:
         # If the file isn't compressed, we don't write anything to `path_to_decompressed_dir`
@@ -210,7 +212,7 @@ def process_table(args):
 
                 # Replace values in `concept_id` with the normalized concepts to which they are mapped
                 # based on the `concept_id_map`
-                code = concept_id.map_dict(concept_id_map)
+                code = concept_id.replace(concept_id_map, default=None)
                 
                 # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # #
                 # Determine what to use for the `value` column in MEDS Flat   #
@@ -249,7 +251,7 @@ def process_table(args):
                         )
                         .otherwise(
                             # Should be captured by the source concept id, so just map the value to a string.
-                            concept_id_value.map_dict(concept_name_map)
+                            concept_id_value.replace(concept_name_map, default=None)
                         )
                     )
 
@@ -403,11 +405,10 @@ def extract_metadata(
     # (see https://ohdsi.github.io/TheBookOfOhdsi/StandardizedVocabularies.html#concepts)
     # and use it to generate metadata file as well as populate maps
     # from (concept ID -> concept code) and (concept ID -> concept name)
-    print("Generating metadata from OMOP `concept` table")
-    for concept_file in tqdm(get_table_files(path_to_src_omop_dir, "concept")):
+    for concept_file in tqdm(get_table_files(path_to_src_omop_dir, "concept"), desc="Generating metadata from OMOP `concept` table"):
         # Note: Concept table is often split into gzipped shards by default
         if verbose:
-            print(concept_file)
+            print(f"----> Processing file: `{concept_file}`")
         with load_file(path_to_decompressed_dir, concept_file) as f:
             # Read the contents of the `concept` table shard
             # `load_file` will unzip the file into `path_to_decompressed_dir` if needed
@@ -702,37 +703,36 @@ def main():
         random.seed(RANDOM_SEED)
         random.shuffle(all_tasks)
 
-        print("Decompressing OMOP tables, mapping to MEDS Flat format, writing to disk...")
         if args.num_proc > 1:
             with multiprocessing.get_context("spawn").Pool(args.num_proc, maxtasksperchild=1) as pool:
                 # Wrap all tasks with tqdm for a progress bar
                 total_tasks = len(all_tasks)
-                with tqdm(total=total_tasks, desc="Mapping OMOP tables -> MEDS format") as pbar:
+                with tqdm(total=total_tasks, desc="Converting OMOP tables => MEDS Flat") as pbar:
                     for _ in pool.imap_unordered(process_table, all_tasks):
                         pbar.update()
 
         else:
             # Useful for debugging `process_table` without multiprocessing
-            for task in tqdm(all_tasks):
+            for task in tqdm(all_tasks, desc="Converting OMOP tables => MEDS Flat"):
                 process_table(task)
 
         # TODO: Do we need to do this more often so as to reduce maximum disk storage?
         shutil.rmtree(path_to_decompressed_dir)
 
-        print("Finished converting dataset to MEDS Flat.")
+        print("Finished converting OMOP => MEDS Flat.")
 
     # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # #
     # Collate measurements into timelines for each patient, by shard
     # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # #
 
-    print("Converting from MEDS Flat to MEDS...")
+    print("Start | Converting MEDS Flat => MEDS")
     meds_etl.flat.convert_flat_to_meds(
         source_flat_path=path_to_temp_dir,
         target_meds_path=os.path.join(args.path_to_dest_meds_dir, "result"),
         num_shards=args.num_shards,
         num_proc=args.num_proc
     )
-    print("...finished converting MEDS Flat to MEDS")
+    print("Done | Converting MEDS Flat => MEDS")
     shutil.move(
         src=os.path.join(args.path_to_dest_meds_dir, "result", "data"), 
         dst=os.path.join(args.path_to_dest_meds_dir, "data")

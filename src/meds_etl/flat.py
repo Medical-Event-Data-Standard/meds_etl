@@ -298,6 +298,60 @@ def process_csv_file(
 
             create_and_write_shards_from_table(batch, temp_dir, num_shards, time_formats, metadata_columns, fname)
 
+def process_shard(args):
+    """Given a specific shard of patients, group their events into MEDS timelines and save to disk."""
+    shard_index: int = args[0]
+    temp_dir: str = args[1]
+    data_dir: str = args[2]
+    metadata_columns: List[str] = args[3]
+    
+    logging.info("Processing shard ", shard_index)
+    shard_dir = os.path.join(temp_dir, str(shard_index))
+
+    if len(os.listdir(shard_dir)) == 0:
+        return
+
+    events = [pl.scan_parquet(os.path.join(shard_dir, a)) for a in os.listdir(shard_dir)]
+
+    all_events = pl.concat(events)
+
+    measurement = pl.struct(
+        code=pl.col("code"),
+        text_value=pl.col("text_value"),
+        numeric_value=pl.col("numeric_value"),
+        datetime_value=pl.col("datetime_value"),
+        metadata=pl.col("metadata"),
+    )
+
+    grouped_by_time = all_events.group_by("patient_id", "time").agg(measurements=measurement)
+    
+    event = pl.struct(
+        pl.col("time"),
+        pl.col("measurements"),
+    )
+
+    grouped_by_patient = grouped_by_time.group_by("patient_id").agg(events=event.sort_by(pl.col("time")))
+
+    # We now have our data in the final form, grouped_by_patient, but we have to do one final transformation
+    # We have to convert from polar's large_list to list because large_list is not supported by huggingface
+
+    # We do this conversion using the pyarrow library
+
+    # Save and load our data in order to convert to pyarrow library
+    converted = grouped_by_patient.collect().to_arrow()
+
+    # Now we need to reconstruct the schema
+    if len(metadata_columns) == 0:
+        metadata_schema = pa.null()
+    else:
+        metadata_schema = pa.struct([(column, pa.string()) for column in metadata_columns])
+
+    desired_schema = meds.patient_schema(metadata_schema)
+
+    # All the larg_lists are now converted to lists, so we are good to load with huggingface
+    casted = converted.cast(desired_schema)
+
+    pq.write_table(casted, os.path.join(data_dir, f"data_{shard_index}.parquet"))
 
 def convert_flat_to_meds(
     source_flat_path: str,
@@ -314,12 +368,18 @@ def convert_flat_to_meds(
     events = []
 
     decompressed_dir = os.path.join(target_meds_path, "decompressed")
+    if os.path.exists(decompressed_dir):
+        shutil.rmtree(decompressed_dir)
     os.mkdir(decompressed_dir)
 
     temp_dir = os.path.join(target_meds_path, "temp")
+    if os.path.exists(temp_dir):
+        shutil.rmtree(temp_dir)
     os.mkdir(temp_dir)
 
     for shard_index in range(num_shards):
+        if os.path.exists(os.path.join(temp_dir, str(shard_index))):
+            shutil.rmtree(os.path.join(temp_dir, str(shard_index)))
         os.mkdir(os.path.join(temp_dir, str(shard_index)))
 
     if os.path.exists(os.path.join(source_flat_path, "metadata.json")):
@@ -414,58 +474,22 @@ def convert_flat_to_meds(
     logging.info("Processing each shard")
 
     data_dir = os.path.join(target_meds_path, "data")
+    if os.path.exists(data_dir):
+        shutil.rmtree(data_dir)
     os.mkdir(data_dir)
 
-    print("Collating source table data, shard by shard, to create patient timelines...")
-    print("(Gathering measurements into events, events into timelines)")
-    for shard_index in tqdm(range(num_shards), total=num_shards):
-        logging.info("Processing shard ", shard_index)
-        shard_dir = os.path.join(temp_dir, str(shard_index))
-
-        if len(os.listdir(shard_dir)) == 0:
-            continue
-
-        events = [pl.scan_parquet(os.path.join(shard_dir, a)) for a in os.listdir(shard_dir)]
-
-        all_events = pl.concat(events)
-
-        measurement = pl.struct(
-            code=pl.col("code"),
-            text_value=pl.col("text_value"),
-            numeric_value=pl.col("numeric_value"),
-            datetime_value=pl.col("datetime_value"),
-            metadata=pl.col("metadata"),
-        )
-
-        grouped_by_time = all_events.group_by("patient_id", "time").agg(measurements=measurement)
-
-        event = pl.struct(
-            pl.col("time"),
-            pl.col("measurements"),
-        )
-
-        grouped_by_patient = grouped_by_time.group_by("patient_id").agg(events=event.sort_by(pl.col("time")))
-
-        # We now have our data in the final form, grouped_by_patient, but we have to do one final transformation
-        # We have to convert from polar's large_list to list because large_list is not supported by huggingface
-
-        # We do this conversion using the pyarrow library
-
-        # Save and load our data in order to convert to pyarrow library
-        converted = grouped_by_patient.collect().to_arrow()
-
-        # Now we need to reconstruct the schema
-        if len(metadata_columns) == 0:
-            metadata_schema = pa.null()
-        else:
-            metadata_schema = pa.struct([(column, pa.string()) for column in metadata_columns])
-
-        desired_schema = meds.patient_schema(metadata_schema)
-
-        # All the larg_lists are now converted to lists, so we are good to load with huggingface
-        casted = converted.cast(desired_schema)
-
-        pq.write_table(casted, os.path.join(data_dir, f"data_{shard_index}.parquet"))
+    
+    if num_proc != 1:
+        with mp.get_context("spawn").Pool(num_proc, maxtasksperchild=1) as pool:
+            shard_tasks = [
+                (shard_index, temp_dir, data_dir, metadata_columns) for shard_index in range(num_shards)
+            ]
+            with tqdm(total=num_shards, desc="Going shard by shard, grouping measurements => events => patients...") as pbar:
+                for _ in pool.imap_unordered(process_shard, shard_tasks):
+                    pbar.update()
+    else:
+        for shard_index in tqdm(range(num_shards), desc="Going shard by shard, grouping measurements => events => patients..."):
+            process_shard([shard_index, temp_dir, data_dir, metadata_columns])
 
     shutil.rmtree(temp_dir)
 
