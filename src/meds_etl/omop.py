@@ -547,6 +547,13 @@ def main():
         help="Number of vCPUs to use for performing the MEDS ETL"
     )
     parser.add_argument(
+        "--engine", 
+        type=str, 
+        default='polars',
+        choices=['polars', 'duckdb'],
+        help="The engine to use for doing the conversion from MEDS Flat => MEDS (a large GROUP BY => AGG query). Current options are 'polars' or 'duckdb'. See the Github repo for a comparison between these approaches (i.e. memory v. speed tradeoffs)."
+    )
+    parser.add_argument(
         "--verbose", 
         type=int, 
         default=0
@@ -730,7 +737,8 @@ def main():
         source_flat_path=path_to_temp_dir,
         target_meds_path=os.path.join(args.path_to_dest_meds_dir, "result"),
         num_shards=args.num_shards,
-        num_proc=args.num_proc
+        num_proc=args.num_proc,
+        engine=args.engine,
     )
     print("Done | Converting MEDS Flat => MEDS")
     shutil.move(

@@ -298,8 +298,8 @@ def process_csv_file(
 
             create_and_write_shards_from_table(batch, temp_dir, num_shards, time_formats, metadata_columns, fname)
 
-def process_shard(args):
-    """Given a specific shard of patients, group their events into MEDS timelines and save to disk."""
+def process_shard_polars(args):
+    """Given a specific shard of patients, use Polars to group their events into MEDS timelines and save to disk."""
     shard_index: int = args[0]
     temp_dir: str = args[1]
     data_dir: str = args[2]
@@ -353,11 +353,59 @@ def process_shard(args):
 
     pq.write_table(casted, os.path.join(data_dir, f"data_{shard_index}.parquet"))
 
+
+def process_shard_duckdb(args):
+    """Given a specific shard of patients, use DuckDB to group their events into MEDS timelines and save to disk."""
+    import duckdb
+    shard_index: int = args[0]
+    temp_dir: str = args[1]
+    data_dir: str = args[2]
+
+    logging.info("Processing shard ", shard_index)
+    shard_dir: str = os.path.join(temp_dir, str(shard_index))
+    path_to_output: str = os.path.join(data_dir, f"data_{shard_index}.parquet")
+
+    if len(os.listdir(shard_dir)) == 0:
+        return
+    
+    # TODO (@Michael) -- Instead of COPY directly to .parquet,
+    # should we convert to polars via `.pl()` then apply the casting to MEDS schema?
+    duckdb.sql(f"""
+        DROP TABLE IF EXISTS all_events_{shard_index};
+        CREATE TABLE all_events_{shard_index} AS SELECT * FROM '{shard_dir}/*.parquet';
+        COPY (
+            SELECT
+                patient_id,
+                list({{ 
+                    'time' : time, 
+                    'measurements' : measurements 
+                }}) AS events
+            FROM (
+                SELECT
+                    patient_id,
+                    time,
+                    list({{
+                        'code' : code, 
+                        'text_value' : text_value, 
+                        'numeric_value' : numeric_value, 
+                        'datetime_value' : datetime_value, 
+                        'metadata' : metadata 
+                    }}) AS measurements
+                FROM all_events_{shard_index}
+                GROUP BY patient_id, time
+                ORDER BY patient_id, time ASC
+            )
+            GROUP BY patient_id
+            ORDER BY patient_id
+        ) TO '{path_to_output}' (FORMAT 'parquet', CODEC 'zstd');
+    """)
+    
 def convert_flat_to_meds(
     source_flat_path: str,
     target_meds_path: str,
     num_shards: int = 100,
     num_proc: int = 1,
+    engine: str = 'polars',
     time_formats: Iterable[str] = ("%Y-%m-%d %H:%M:%S%.f", "%Y-%m-%d"),
 ) -> None:
     if not os.path.exists(source_flat_path):
@@ -478,7 +526,15 @@ def convert_flat_to_meds(
         shutil.rmtree(data_dir)
     os.mkdir(data_dir)
 
-    
+    # Select backend engine to do GROUP BY / AGG operations (most time-consuming part of the process)
+    if engine == 'polars':
+        process_shard = process_shard_polars
+    elif engine == 'duckdb':
+        process_shard = process_shard_duckdb
+    else:
+        raise ValueError(f"Unsupported engine: {engine}")
+
+    # Convert from MEDS Flat => MEDS
     if num_proc != 1:
         with mp.get_context("spawn").Pool(num_proc, maxtasksperchild=1) as pool:
             shard_tasks = [
@@ -500,5 +556,6 @@ def convert_flat_to_meds_main():
     parser.add_argument("target_meds_path", type=str)
     parser.add_argument("--num_shards", type=int, default=100)
     parser.add_argument("--num_proc", type=int, default=1)
+    parser.add_argument("--engine", type=str, default='polars', choices=['polars', 'duckdb'])
     args = parser.parse_args()
     convert_flat_to_meds(**vars(args))
