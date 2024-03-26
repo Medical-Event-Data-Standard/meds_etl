@@ -18,6 +18,7 @@ import meds
 import polars as pl
 import pyarrow as pa
 import pyarrow.parquet as pq
+from tqdm import tqdm
 
 mp = multiprocessing.get_context("forkserver")
 if mp is None:
@@ -31,6 +32,8 @@ KNOWN_COLUMNS = {"patient_id", "numeric_value", "datetime_value", "text_value", 
 def convert_file_to_flat(source_file: str, *, target_flat_data_path: str, format: Format, time_format: str) -> None:
     """Convert a single MEDS file to MEDS Flat"""
     table = pl.scan_parquet(source_file)
+
+    table = table.drop("static_measurements")
 
     table = table.explode("events")
     table = table.unnest("events")
@@ -254,7 +257,7 @@ def create_and_write_shards_from_table(
 def process_parquet_file(
     event_file: str, *, temp_dir: str, num_shards: int, time_formats: Iterable[str], metadata_columns: List[str]
 ):
-    """Convert a MEDS Flat parquet file to MEDS."""
+    """Partition MEDS Flat files into shards based on patient ID and write to disk"""
     logging.info("Working on ", event_file)
 
     table = pl.scan_parquet(event_file)
@@ -343,7 +346,7 @@ def convert_flat_to_meds(
     random.shuffle(parquet_tasks)
 
     if num_proc != 1:
-        with mp.get_context("spawn").Pool(num_proc) as pool:
+        with mp.get_context("spawn").Pool(num_proc, maxtasksperchild=1) as pool:
             metadata_columns_set = set()
             for columns in pool.imap_unordered(get_csv_columns, csv_tasks):
                 metadata_columns_set |= columns
@@ -370,10 +373,13 @@ def convert_flat_to_meds(
                 metadata_columns=metadata_columns,
             )
 
-            for _ in pool.imap_unordered(csv_processor, csv_tasks):
-                pass
-            for _ in pool.imap_unordered(parquet_processor, parquet_tasks):
-                pass
+            print("Partitioning MEDS Flat files into shards based on patient ID and writing to disk...")
+            with tqdm(total=len(csv_tasks)) as pbar:
+                for _ in pool.imap_unordered(csv_processor, csv_tasks):
+                    pbar.update()
+            with tqdm(total=len(parquet_tasks)) as pbar:
+                for _ in pool.imap_unordered(parquet_processor, parquet_tasks):
+                    pbar.update()
     else:
         metadata_columns_set = set()
         for task in csv_tasks:
@@ -400,9 +406,9 @@ def convert_flat_to_meds(
             metadata_columns=metadata_columns,
         )
 
-        for task in csv_tasks:
+        for task in tqdm(csv_tasks, total=len(csv_tasks)):
             csv_processor(task)
-        for task in parquet_tasks:
+        for task in tqdm(parquet_tasks, total=len(parquet_tasks)):
             parquet_processor(task)
 
     shutil.rmtree(decompressed_dir)
@@ -412,7 +418,9 @@ def convert_flat_to_meds(
     data_dir = os.path.join(target_meds_path, "data")
     os.mkdir(data_dir)
 
-    for shard_index in range(num_shards):
+    print("Collating source table data, shard by shard, to create patient timelines...")
+    print("(Gathering measurements into events, events into timelines)")
+    for shard_index in tqdm(range(num_shards), total=num_shards):
         logging.info("Processing shard ", shard_index)
         shard_dir = os.path.join(temp_dir, str(shard_index))
 
@@ -439,6 +447,11 @@ def convert_flat_to_meds(
         )
 
         grouped_by_patient = grouped_by_time.group_by("patient_id").agg(events=event.sort_by(pl.col("time")))
+
+        # We need to add a dummy column for static_measurements
+        grouped_by_patient = grouped_by_patient.with_columns(static_measurements=pl.lit(None)).select(
+            ["patient_id", "static_measurements", "events"]
+        )
 
         # We now have our data in the final form, grouped_by_patient, but we have to do one final transformation
         # We have to convert from polar's large_list to list because large_list is not supported by huggingface
