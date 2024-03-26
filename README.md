@@ -7,24 +7,36 @@ This package library currently supports:
 - MIMIC-IV
 - OMOP v5
 - MEDS FLAT, a flat version of MEDS
-## Setup
 
-Install the package
+## Setup
+Create an environment of your choice:
+```bash
+conda create -n meds_etl
 ```
-pip install meds_etl
+Install the package
+```bash
+python -m pip install .
 ```
 
 ## MIMIC-IV
 
 In order to run the MIMIC-IV ETL, simply run the following command:
 
-`meds_etl_mimic mimiciv mimiciv_meds` where mimiciv is a download of MIMIC-IV and mimiciv_meds will be the destination path for the dataset.
+```bash
+meds_etl_mimic [PATH_TO_SOURCE_MIMIC] [PATH_TO_OUTPUT]
+```
+
+where `[PATH_TO_SOURCE_MIMIC]` is a download of MIMIC-IV and `[PATH_TO_OUTPUT]` will be the destination path for the MEDS dataset.
 
 ## OMOP
 
 In order to run the OMOP ETL, simply run the following command:
 
-`meds_etl_omop omop omop_meds` where omop is a folder containing csv files (optionally gzipped) for an OMOP dataset. Each table should either be a csv file with the table name (such as person.csv) or a folder with the table name containing csv files.
+```bash
+meds_etl_omop [PATH_TO_SOURCE_OMOP] [PATH_TO_OUTPUT]
+```
+
+where `[PATH_TO_SOURCE_OMOP]` is a folder containing csv files (optionally gzipped) for an OMOP dataset and `[PATH_TO_OUTPUT]` will be the destination path for the MEDS dataset. Each OMOP table should either be a csv file with the table name (such as person.csv) or a folder with the table name containing csv files.
 
 ## Unit tests
 
@@ -94,3 +106,25 @@ We also support an inverse ETL, converting from MEDS to MEDS Flat.
 The command for this is `meds_etl_to_flat`. For example:
 
 `meds_etl_to_flat meds meds_flat` where meds is a folder containing a MEDS dataset and meds_flat is the folder that will store the resulting MEDS Flat dataset.
+
+## Troubleshooting
+
+**Polars incompatible with Mac M1**
+
+If you get this error when running `meds_etl`:
+
+```bash
+RuntimeWarning: Missing required CPU features.
+
+The following required CPU features were not detected:
+    avx, fma
+Continuing to use this version of Polars on this processor will likely result in a crash.
+Install the `polars-lts-cpu` package instead of `polars` to run Polars with better compatibility.
+```
+
+Then you'll need to install the run the following:
+
+```bash
+pip uninstall polars
+pip install polars-lts-cpu
+```
