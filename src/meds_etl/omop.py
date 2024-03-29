@@ -609,7 +609,7 @@ def main():
 
         print("Decompressing OMOP tables, mapping to MEDS Flat format, writing to disk...")
         if args.num_proc > 1:
-            with multiprocessing.get_context("spawn").Pool(args.num_proc, maxtasksperchild=1) as pool:
+            with multiprocessing.get_context("spawn").Pool(args.num_proc) as pool:
                 # Wrap all tasks with tqdm for a progress bar
                 total_tasks = len(all_tasks)
                 with tqdm(total=total_tasks, desc="Mapping OMOP tables -> MEDS format") as pbar:
