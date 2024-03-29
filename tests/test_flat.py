@@ -107,26 +107,29 @@ def create_dataset(tmp_path: pathlib.Path, include_metadata=True):
 
 
 def roundtrip_helper(tmp_path: pathlib.Path, patients: List[meds.Patient], format: meds_etl.flat.Format, num_proc: int):
-    print("Testing", format)
-    meds_dataset = tmp_path / "meds"
-    meds_flat_dataset = tmp_path / f"meds_flat_{format}_{num_proc}"
-    meds_dataset2 = tmp_path / f"meds2_{format}_{num_proc}"
+    for backend in ["duckdb", "polars"]:
+        print("Testing", format, backend)
+        meds_dataset = tmp_path / "meds"
+        meds_flat_dataset = tmp_path / f"meds_flat_{format}_{num_proc}_{backend}"
+        meds_dataset2 = tmp_path / f"meds2_{format}_{num_proc}_{backend}"
 
-    meds_etl.flat.convert_meds_to_flat(str(meds_dataset), str(meds_flat_dataset), num_proc=num_proc, format=format)
+        meds_etl.flat.convert_meds_to_flat(str(meds_dataset), str(meds_flat_dataset), num_proc=num_proc, format=format)
 
-    meds_etl.flat.convert_flat_to_meds(str(meds_flat_dataset), str(meds_dataset2), num_proc=num_proc, num_shards=10)
+        meds_etl.flat.convert_flat_to_meds(
+            str(meds_flat_dataset), str(meds_dataset2), num_proc=num_proc, num_shards=10, backend=backend
+        )
 
-    patient_table = pa.concat_tables(
-        [pq.read_table(meds_dataset2 / "data" / i) for i in os.listdir(meds_dataset2 / "data")]
-    )
+        patient_table = pa.concat_tables(
+            [pq.read_table(meds_dataset2 / "data" / i) for i in os.listdir(meds_dataset2 / "data")]
+        )
 
-    final_patients = patient_table.to_pylist()
-    final_patients.sort(key=lambda a: a["patient_id"])
+        final_patients = patient_table.to_pylist()
+        final_patients.sort(key=lambda a: a["patient_id"])
 
     assert patients == final_patients
 
 
-def test_roundtrip(tmp_path: pathlib.Path):
+def test_roundtrip_with_metadata(tmp_path: pathlib.Path):
     meds_dataset = tmp_path / "meds"
     create_dataset(meds_dataset)
     patients = pq.read_table(meds_dataset / "data" / "patients.parquet").to_pylist()
@@ -156,7 +159,7 @@ def test_roundtrip_no_metadata(tmp_path: pathlib.Path):
     roundtrip_helper(tmp_path, patients, "parquet", 4)
 
 
-def test_shuffle(tmp_path: pathlib.Path):
+def test_shuffle_polars(tmp_path: pathlib.Path):
     meds_dataset = tmp_path / "meds"
     create_dataset(meds_dataset)
 
@@ -190,6 +193,54 @@ def test_shuffle(tmp_path: pathlib.Path):
     meds_dataset2 = tmp_path / "meds2"
 
     meds_etl.flat.convert_flat_to_meds(str(meds_flat_dataset), str(meds_dataset2), num_shards=10)
+
+    patient_table = pa.concat_tables(
+        [pq.read_table(meds_dataset2 / "data" / i) for i in os.listdir(meds_dataset2 / "data")]
+    )
+
+    final_patients = patient_table.to_pylist()
+    final_patients.sort(key=lambda a: a["patient_id"])
+    for patient in final_patients:
+        for event in patient["events"]:
+            event["measurements"].sort(key=lambda m: m["code"])
+
+    assert patients == final_patients
+
+
+def test_shuffle_duckdb(tmp_path: pathlib.Path):
+    meds_dataset = tmp_path / "meds"
+    create_dataset(meds_dataset)
+
+    patients = pq.read_table(meds_dataset / "data" / "patients.parquet").to_pylist()
+    patients.sort(key=lambda a: a["patient_id"])
+    for patient in patients:
+        for event in patient["events"]:
+            event["measurements"].sort(key=lambda m: m["code"])
+
+    meds_flat_dataset = tmp_path / "meds_flat"
+    meds_etl.flat.convert_meds_to_flat(str(meds_dataset), str(meds_flat_dataset), format="csv")
+
+    with open(tmp_path / "meds_flat" / "flat_data" / "patients.csv") as f:
+        lines = f.readlines()
+        header = lines[0]
+        rows = lines[1:]
+
+    random.shuffle(rows)
+
+    os.unlink(tmp_path / "meds_flat" / "flat_data" / "patients.csv")
+
+    num_parts = 3
+    rows_per_part = (len(rows) + num_parts - 1) // num_parts
+
+    for a in range(num_parts):
+        r = rows[a * rows_per_part : (a + 1) * rows_per_part]
+        with open(tmp_path / "meds_flat" / "flat_data" / (str(a) + ".csv"), "w") as f:
+            f.write(header)
+            f.write("".join(r))
+
+    meds_dataset2 = tmp_path / "meds2"
+
+    meds_etl.flat.convert_flat_to_meds(str(meds_flat_dataset), str(meds_dataset2), backend="duckdb")
 
     patient_table = pa.concat_tables(
         [pq.read_table(meds_dataset2 / "data" / i) for i in os.listdir(meds_dataset2 / "data")]

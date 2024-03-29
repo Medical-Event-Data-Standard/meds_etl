@@ -14,6 +14,7 @@ import subprocess
 import tempfile
 from typing import Iterable, List, Literal, Set, TextIO, Tuple, cast
 
+import duckdb
 import meds
 import polars as pl
 import pyarrow as pa
@@ -306,6 +307,21 @@ def convert_flat_to_meds(
     target_meds_path: str,
     num_shards: int = 100,
     num_proc: int = 1,
+    backend: str = "polars",
+    time_formats: Iterable[str] = ("%Y-%m-%d %H:%M:%S%.f", "%Y-%m-%d"),
+) -> None:
+    if backend == "duckdb":
+        convert_flat_to_meds_duckdb(source_flat_path, target_meds_path, num_proc=num_proc)
+    else:
+        # Default to Polars
+        convert_flat_to_meds_polars(source_flat_path, target_meds_path, num_shards=num_shards, num_proc=num_proc)
+
+
+def convert_flat_to_meds_polars(
+    source_flat_path: str,
+    target_meds_path: str,
+    num_shards: int = 100,
+    num_proc: int = 1,
     time_formats: Iterable[str] = ("%Y-%m-%d %H:%M:%S%.f", "%Y-%m-%d"),
 ) -> None:
     if not os.path.exists(source_flat_path):
@@ -473,6 +489,151 @@ def convert_flat_to_meds(
         casted = converted.cast(desired_schema)
 
         pq.write_table(casted, os.path.join(data_dir, f"data_{shard_index}.parquet"))
+
+    shutil.rmtree(temp_dir)
+
+
+def convert_flat_to_meds_duckdb(
+    source_flat_path: str,
+    target_meds_path: str,
+    num_proc: int = 1,
+    time_formats: Iterable[str] = ("%Y-%m-%d %H:%M:%S%.f", "%Y-%m-%d"),
+) -> None:
+    """A duckdb implementation of convert_flat_to_meds"""
+
+    if not os.path.exists(source_flat_path):
+        raise ValueError(f'The source MEDS Flat folder ("{source_flat_path}") does not seem to exist?')
+
+    os.makedirs(target_meds_path, exist_ok=True)
+
+    temp_dir = os.path.join(target_meds_path, "temp")
+    os.mkdir(temp_dir)
+
+    conn = duckdb.connect()
+
+    conn.sql(f"SET threads to {num_proc}")
+    conn.sql("SET enable_progress_bar = true;")
+    conn.sql("SET preserve_insertion_order = false;")
+    conn.sql(f"SET temp_directory = '{temp_dir}';")
+
+    if os.path.exists(os.path.join(source_flat_path, "metadata.json")):
+        shutil.copyfile(
+            os.path.join(source_flat_path, "metadata.json"), os.path.join(target_meds_path, "metadata.json")
+        )
+
+    csv_tasks = []
+    parquet_tasks = []
+
+    source_flat_data_path = os.path.join(source_flat_path, "flat_data")
+
+    for flat_file in os.listdir(source_flat_data_path):
+        full_flat_file = os.path.join(source_flat_data_path, flat_file)
+        if full_flat_file.endswith(".csv") or full_flat_file.endswith(".csv.gz"):
+            csv_tasks.append(full_flat_file)
+        else:
+            parquet_tasks.append(full_flat_file)
+
+    random.seed(3422342)
+    random.shuffle(csv_tasks)
+    random.shuffle(parquet_tasks)
+
+    all_views = []
+
+    metadata_columns_set = set()
+
+    tasks = []
+    all_columns = []
+    for task in csv_tasks:
+        all_columns.append(get_csv_columns(task))
+        tasks.append(task)
+
+    for task in parquet_tasks:
+        all_columns.append(get_parquet_columns(task))
+        tasks.append(task)
+
+    metadata_columns_set = {b for a in all_columns for b in a}
+
+    metadata_columns_set -= KNOWN_COLUMNS
+    metadata_columns = sorted(list(metadata_columns_set))
+
+    for i, (task, columns) in enumerate(zip(tasks, all_columns)):
+        select_parts = []
+
+        select_parts.append("cast(time as timestamp) as time")
+        select_parts.append("cast(patient_id as int64) as patient_id")
+        select_parts.append("cast(code as string) as code")
+
+        if "value" not in columns:
+            select_parts.append("cast(datetime_value as timestamp) as datetime_value")
+            select_parts.append("cast(numeric_value as float4) as numeric_value")
+            select_parts.append("cast(text_value as string) as text_value")
+        else:
+            select_parts.append("try_cast(value as timestamp) as datetime_value")
+
+            select_parts.append(
+                """
+                try_cast(
+                    (case when (try_cast(value as timestamp) is null) then value else null end)
+                    as float4
+                ) as numeric_value
+            """
+            )
+
+            select_parts.append(
+                """
+                cast(
+                    (
+                        case when (
+                            (try_cast(value as timestamp) is null ) AND (try_cast(value as float4) is null)
+                        ) then value else null end
+                    )
+                as string) as text_value
+            """
+            )
+
+        for column in metadata_columns:
+            if column in columns:
+                select_parts.append(f'cast("{column}" as string) as "{column}"')
+            else:
+                select_parts.append(f'cast(null as string) as "{column}"')
+
+        full_query = ", ".join(select_parts)
+
+        all_views.append(f"SELECT * FROM v{i}")
+        conn.sql(f"CREATE VIEW v{i} as SELECT {full_query} FROM '{task}'")
+
+    conn.sql(f"CREATE VIEW all_events as {' UNION ALL '.join(all_views)}")
+
+    if len(metadata_columns) != 0:
+        metadata_str = "{" + ", ".join(f""" '{k}': "{k}" """ for k in metadata_columns) + "}"
+    else:
+        metadata_str = "null"
+
+    conn.sql(
+        f"""
+        CREATE VIEW joined AS
+        SELECT patient_id, null as static_measurements, list({{'time': time, 'measurements': measurements}}) as events
+        FROM (
+            SELECT patient_id, time,
+                list({{
+                    'code': code,
+                    'text_value': text_value,
+                    'numeric_value': numeric_value,
+                    'datetime_value': datetime_value,
+                    'metadata': {metadata_str}}}
+                ) as measurements
+            FROM all_events
+            group by patient_id, time
+            order by time ASC
+        )
+        group by patient_id
+    """
+    )
+
+    data_dir = os.path.join(target_meds_path, "data")
+
+    print("Generating result")
+    conn.sql(f"copy joined to '{data_dir}' (format parquet, per_thread_output true, file_size_bytes 1e9)")
 
     shutil.rmtree(temp_dir)
 
