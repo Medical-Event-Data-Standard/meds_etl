@@ -602,6 +602,20 @@ def convert_flat_to_meds_duckdb(
         all_views.append(f"SELECT * FROM v{i}")
         conn.sql(f"CREATE VIEW v{i} as SELECT {full_query} FROM '{task}'")
 
+    if len(all_views) > 500:
+        # We need to compress down to less than 500 to avoid file issues
+        print("There are too many source files, we need to consolidate some of them")
+
+        new_views = []
+
+        num_chunks = (len(all_views) + 500 - 1) // 500
+        for chunk_index in tqdm(range(num_chunks)):
+            partial_views = all_views[chunk_index * 500 : (chunk_index + 1) * 500]
+            conn.sql(f"CREATE TABLE t{chunk_index} as {' UNION ALL '.join(partial_views)}")
+            new_views.append(f"SELECT * FROM t{chunk_index}")
+
+        all_views = new_views
+
     conn.sql(f"CREATE VIEW all_events as {' UNION ALL '.join(all_views)}")
 
     if len(metadata_columns) != 0:
