@@ -455,6 +455,10 @@ def extract_metadata(
         if omop_birth_concept_id is not None and omop_death_concept_id is not None:
             break
 
+    if omop_birth_concept_id is None or omop_death_concept_id is None:
+        raise ValueError("The provided OMOP dataset is missing either the birth or death concept. \n" + 
+                         "Look for SNOMED codes " + meds.birth_code + " and " + meds.death_code + " within concept.csv")
+
     # Include map from custom concepts to normalized (ie standard ontology) 
     # parent concepts, where possible, in the code_metadata dictionary
     for concept_relationship_file in get_table_files(path_to_src_omop_dir, "concept_relationship"):
