@@ -4,6 +4,7 @@ import os
 import shutil
 import subprocess
 from importlib.resources import files
+from typing import Iterable
 
 import jsonschema
 import meds
@@ -13,6 +14,8 @@ import meds_etl
 import meds_etl.flat
 
 MIMIC_VERSION = "2.2"
+
+MIMIC_TIME_FORMATS: Iterable[str] = ("%Y-%m-%d %H:%M:%S%.f", "%Y-%m-%d")
 
 
 def add_dot(code, position):
@@ -43,6 +46,8 @@ def main():
     parser.add_argument("src_mimic", type=str)
     parser.add_argument("destination", type=str)
     parser.add_argument("--num_shards", type=int, default=100)
+    parser.add_argument("--num_proc", type=int, default=1)
+    parser.add_argument("--backend", type=str, default="polars")
     args = parser.parse_args()
 
     if not os.path.exists(args.src_mimic):
@@ -379,12 +384,19 @@ def main():
                 if mapping_code.get("possibly_null_time", False):
                     table_csv = table_csv.filter(time.is_not_null())
 
+                time = meds_etl.flat.parse_time(time, MIMIC_TIME_FORMATS)
+
                 columns = {
                     "patient_id": patient_id,
                     "time": time,
                     "code": code,
-                    "value": value,
                 }
+
+                d, n, t = meds_etl.flat.convert_generic_value_to_specific(value, MIMIC_TIME_FORMATS)
+
+                columns["datetime_value"] = d
+                columns["numeric_value"] = n
+                columns["text_value"] = t
 
                 for k, v in mapping_code["metadata"].items():
                     columns[k] = v.alias(k)
@@ -403,7 +415,11 @@ def main():
     print("Processing each shard")
 
     meds_etl.flat.convert_flat_to_meds(
-        temp_dir, os.path.join(args.destination, "result"), num_shards=args.num_shards, num_proc=1
+        temp_dir,
+        os.path.join(args.destination, "result"),
+        num_shards=args.num_shards,
+        num_proc=args.num_proc,
+        backend=args.backend,
     )
     shutil.move(os.path.join(args.destination, "result", "data"), os.path.join(args.destination, "data"))
     shutil.rmtree(os.path.join(args.destination, "result"))

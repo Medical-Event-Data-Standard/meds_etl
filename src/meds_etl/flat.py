@@ -5,16 +5,16 @@ import csv
 import functools
 import gzip
 import logging
-import math
 import multiprocessing
 import os
 import pathlib
-import psutil
 import random
 import shutil
 import subprocess
 import tempfile
-from typing import Iterable, List, Literal, Optional, Set, TextIO, Tuple, cast
+from typing import Iterable, List, Literal, Optional, TextIO, Tuple, cast
+
+import psutil
 
 try:
     import duckdb
@@ -125,9 +125,9 @@ def load_file(decompressed_dir: str, fname: str) -> TextIO:
 def get_csv_columns(event_file: str) -> dict:
     """
     Reads the first line of a CSV file to extract column names, assuming all columns as strings.
-    
+
     This function opens a CSV file, which can be optionally compressed with gzip, reads the first line to get
-    the column names, and assumes all columns to be of string data type since CSV files do not contain explicit 
+    the column names, and assumes all columns to be of string data type since CSV files do not contain explicit
     type information.
 
     Args:
@@ -148,8 +148,8 @@ def get_csv_columns(event_file: str) -> dict:
         with open(event_file, "r") as f:
             reader = csv.reader(f)
             columns = next(reader)
-    
-    return {col: 'string' for col in columns}
+
+    return {col: "string" for col in columns}
 
 
 def get_parquet_columns(event_file: str) -> dict:
@@ -161,10 +161,10 @@ def get_parquet_columns(event_file: str) -> dict:
     of the ETL pipeline.
 
     Args:
-        event_file (str): The file path to the Parquet file. 
+        event_file (str): The file path to the Parquet file.
 
     Returns:
-        dict: A dictionary where keys are column names from the Parquet file schema, and values are the 
+        dict: A dictionary where keys are column names from the Parquet file schema, and values are the
         data type of each column represented as a string.
 
     Raises:
@@ -203,7 +203,7 @@ def verify_shard(shard, event_file, important_columns=("patient_id", "time", "co
         shard (pl.DataFrame): Polars dataframe where each row represents a measurement
         event_file (str): Path to the source data for the shard, used only for logging/reporting
         important_columns (Tuple[str]): Columns that should not have any null values
-    
+
     Raises:
         ValueError if any entries in any of the important columns are null
     """
@@ -217,12 +217,17 @@ def verify_shard(shard, event_file, important_columns=("patient_id", "time", "co
             raise ValueError(error_message)
 
 
-def convert_generic_value_to_specific(generic_value: pl.Expr, time_formats) -> Tuple[pl.Expr, pl.Expr, pl.Expr]:
+def parse_time(time: pl.Expr, time_formats: Iterable[str]) -> pl.Expr:
+    return pl.coalesce(
+        [time.str.to_datetime(time_format, strict=False, time_unit="us") for time_format in time_formats]
+    )
+
+
+def convert_generic_value_to_specific(generic_value: pl.Expr) -> Tuple[pl.Expr, pl.Expr, pl.Expr]:
     generic_value = generic_value.str.strip_chars()
 
-    datetime_value = pl.coalesce(
-        [generic_value.str.to_datetime(time_format, strict=False, time_unit="us") for time_format in time_formats]
-    )
+    # It's fundamentally very difficult to infer datetime values from strings
+    datetime_value = pl.lit(None, dtype=pl.Datetime(time_unit="us"))
 
     numeric_value = (
         pl.when(datetime_value.is_null())
@@ -251,13 +256,10 @@ def create_and_write_shards_from_table(
     # Convert time column into polars Datetime/`datetime[μs]` type
     time = pl.col("time")
     if table.schema["time"] == pl.Utf8():
-        # If the time column is a UTF-8 string, we parse it using the set of `time_formats` given
-        time = pl.coalesce(
-            [time.str.to_datetime(time_format, strict=False, time_unit="us") for time_format in time_formats]
-        )  # If the column format doesn't match anything in `time_formats` times will be None and cause error
+        time = parse_time(time, time_formats)
     else:
         # If it's not a UTF-8 string, we try to just use polars native `Datetime()` handling
-        time = time.cast(pl.Datetime())
+        time = time.cast(pl.Datetime(time_unit="us"))
 
     # Codes should be UTF-8 strings
     code = pl.col("code").cast(pl.Utf8())
@@ -269,7 +271,7 @@ def create_and_write_shards_from_table(
         for sub_value in ("datetime_value", "numeric_value", "text_value"):
             if sub_value in table.columns:
                 raise ValueError("Cannot have both generic value and specific value columns")
-        datetime_value, numeric_value, text_value = convert_generic_value_to_specific(pl.col("value"), time_formats)
+        datetime_value, numeric_value, text_value = convert_generic_value_to_specific(pl.col("value"))
     else:
         if "datetime_value" in table.columns:
             datetime_value = pl.col("datetime_value")
@@ -303,7 +305,7 @@ def create_and_write_shards_from_table(
 
     metadata = transform_metadata(metadata, metadata_columns)
 
-    # Actually execute the typecast conversion, partition table into 
+    # Actually execute the typecast conversion, partition table into
     # shards based on hashed patient ID
     event_data = (
         table.select(
@@ -374,48 +376,6 @@ def process_csv_file(
             create_and_write_shards_from_table(batch, temp_dir, num_shards, time_formats, metadata_columns, fname)
 
 
-def convert_flat_to_meds(
-    source_flat_path: str,
-    target_meds_path: str,
-    num_shards: Optional[int] = None,
-    num_proc: int = 1,
-    backend: str = "polars",
-    time_formats: Iterable[str] = ("%Y-%m-%d %H:%M:%S%.f", "%Y-%m-%d"),
-) -> None:
-    """
-    Args:
-        source_flat_path (str): Path to directory where MEDS Flat files are stored, structured as follows:
-            {source_flat_path}
-            |-- metadata.json [OPTIONAL]
-            |-- flat_data
-                |-- {table_name}_{map_index}.parquet
-        target_meds_path (str): Path to directory the MEDS files (converted from MEDS Flat) should be stored
-        num_shards (str): Number of patient shards, more shards -> fewer patients per join, only relevant for polars
-        num_proc (int): Number of parallel processes 
-        time_formats (str): Expected possible datetime formats in the `time` column.
-    
-    Returns:
-        None
-    """
-    if backend == "duckdb":
-        convert_flat_to_meds_duckdb(
-            source_flat_path,
-            target_meds_path, 
-            num_shards=num_shards,
-            num_proc=num_proc, 
-            time_formats=time_formats
-        )
-    else:
-        # Default to Polars
-        convert_flat_to_meds_polars(
-            source_flat_path, 
-            target_meds_path, 
-            num_shards=num_shards, 
-            num_proc=num_proc, 
-            time_formats=time_formats
-        )
-
-
 def convert_flat_to_meds_polars(
     source_flat_path: str,
     target_meds_path: str,
@@ -473,7 +433,9 @@ def convert_flat_to_meds_polars(
 
             metadata_columns_set = metadata_columns_info.keys() - KNOWN_COLUMNS
             # TODO: Ideally we'd support non-text metdata columns but for now we assert all metadata are strings
-            assert all([metadata_columns_info[k] in ('string', 'large_string') for k in metadata_columns_set]), "All metadata must be string type"
+            assert all(
+                [metadata_columns_info[k] in ("string", "large_string") for k in metadata_columns_set]
+            ), "All metadata must be string type"
             metadata_columns = sorted(list(metadata_columns_set))
 
             csv_processor = functools.partial(
@@ -509,7 +471,9 @@ def convert_flat_to_meds_polars(
 
         metadata_columns_set = metadata_columns_info.keys() - KNOWN_COLUMNS
         # TODO: Ideally we'd support non-text metdata columns but for now we assert all metadata are strings
-        assert all([metadata_columns_info[k] in ('string', 'large_string') for k in metadata_columns_set]), "All metadata must be string type"
+        assert all(
+            [metadata_columns_info[k] in ("string", "large_string") for k in metadata_columns_set]
+        ), "All metadata must be string type"
         metadata_columns = sorted(list(metadata_columns_set))
 
         csv_processor = functools.partial(
@@ -602,7 +566,7 @@ def convert_flat_to_meds_polars(
 def convert_flat_to_meds_duckdb(
     source_flat_path: str,
     target_meds_path: str,
-    num_shards: Optional[int] = None,
+    num_shards: int = 1,
     num_proc: int = 1,
     memory_limit_GB: Optional[int] = 16,
     time_formats: Iterable[str] = ("%Y-%m-%d %H:%M:%S%.f", "%Y-%m-%d"),
@@ -615,7 +579,7 @@ def convert_flat_to_meds_duckdb(
         conn = duckdb.connect()
     except AttributeError as e:
         raise ImportError("You invoked `duckdb` as backend but duckdb is not installed. Install it using pip.") from e
-    
+
     if not os.path.exists(source_flat_path):
         raise ValueError(f'The source MEDS Flat folder ("{source_flat_path}") does not seem to exist?')
 
@@ -629,7 +593,7 @@ def convert_flat_to_meds_duckdb(
 
     if memory_limit_GB is None:
         # Set the memory limit to 95% of the available virtual memory by default
-        memory_limit_GB = f"{int(psutil.virtual_memory().total / 1e9 * 0.95)}GB"
+        memory_limit_GB = int(psutil.virtual_memory().total / 1e9 * 0.95)
 
     conn.sql(f"SET threads to {num_proc}")
     conn.sql("SET enable_progress_bar = true;")
@@ -728,7 +692,7 @@ def convert_flat_to_meds_duckdb(
 
         all_views.append(f"SELECT * FROM v{i}")
         conn.sql(f"CREATE VIEW v{i} as SELECT {full_query} FROM '{task}'")
-    
+
     if len(all_views) > 500:
         # We need to compress down to less than 500 to avoid file issues
         print("There are too many source files, we need to consolidate some of them")
@@ -742,7 +706,7 @@ def convert_flat_to_meds_duckdb(
             new_views.append(f"SELECT * FROM t{chunk_index}")
 
         all_views = new_views
-    
+
     conn.sql(f"CREATE VIEW all_events as {' UNION ALL '.join(all_views)}")
 
     if len(metadata_columns) != 0:
@@ -764,7 +728,8 @@ def convert_flat_to_meds_duckdb(
 
         create_joined_view_for_shard_query = f"""
             CREATE VIEW shard_{shard_index}_joined AS
-            SELECT patient_id, null as static_measurements, list({{'time': time, 'measurements': measurements}} ORDER BY time ASC) as events
+            SELECT patient_id, null as static_measurements,
+                list({{'time': time, 'measurements': measurements}} ORDER BY time ASC) as events
             FROM (
                 SELECT patient_id, time,
                     list({{
@@ -784,7 +749,7 @@ def convert_flat_to_meds_duckdb(
 
         # See https://duckdb.org/docs/guides/import/parquet_export.html
         write_result_to_disk_query = f"COPY shard_{shard_index}_joined TO '{shard_output_path}' "
-        # See https://duckdb.org/docs/sql/statements/copy.html#copy--to-options and 
+        # See https://duckdb.org/docs/sql/statements/copy.html#copy--to-options and
         # https://duckdb.org/docs/data/parquet/tips.html
         write_result_to_disk_query += "(FORMAT PARQUET)"
         # We could use PER_THREAD_OUTPUT true but then it creates directories for each shard_output_path
@@ -795,6 +760,50 @@ def convert_flat_to_meds_duckdb(
     shutil.rmtree(temp_dir)
 
 
+def convert_flat_to_meds(
+    source_flat_path: str,
+    target_meds_path: str,
+    num_shards: int = 100,
+    num_proc: int = 1,
+    memory_limit_GB: int = 16,
+    time_formats: Iterable[str] = ("%Y-%m-%d %H:%M:%S%.f", "%Y-%m-%d"),
+    backend: str = "polars",
+) -> None:
+    """
+    Args:
+        source_flat_path (str): Path to directory where MEDS Flat files are stored, structured as follows:
+            {source_flat_path}
+            |-- metadata.json [OPTIONAL]
+            |-- flat_data
+                |-- {table_name}_{map_index}.parquet
+        target_meds_path (str): Path to directory the MEDS files (converted from MEDS Flat) should be stored
+        num_shards (str): Number of patient shards, more shards -> fewer patients per join, only relevant for polars
+        num_proc (int): Number of parallel processes
+        time_formats (str): Expected possible datetime formats in the `time` column.
+
+    Returns:
+        None
+    """
+    if not os.path.exists(source_flat_path):
+        raise ValueError(f'The source MEDS Flat folder ("{source_flat_path}") does not seem to exist?')
+
+    if backend == "cpp":
+        import meds_etl_cpp
+
+        meds_etl_cpp.perform_etl(source_flat_path, target_meds_path, num_shards)
+    elif backend == "duckdb":
+        convert_flat_to_meds_duckdb(
+            source_flat_path,
+            target_meds_path,
+            num_shards=num_shards,
+            num_proc=num_proc,
+            time_formats=time_formats,
+            memory_limit_GB=memory_limit_GB,
+        )
+    else:
+        convert_flat_to_meds_polars(source_flat_path, target_meds_path, num_shards, num_proc, time_formats)
+
+
 def convert_flat_to_meds_main():
     parser = argparse.ArgumentParser(prog="meds_etl_flat", description="Performs an ETL from MEDS Flat to MEDS")
     parser.add_argument("source_flat_path", type=str)
@@ -802,5 +811,6 @@ def convert_flat_to_meds_main():
     parser.add_argument("--num_shards", type=int, default=100)
     parser.add_argument("--num_proc", type=int, default=1)
     parser.add_argument("--memory_limit_GB", type=int, default=16)
+    parser.add_argument("--backend", type=str, default="polars")
     args = parser.parse_args()
     convert_flat_to_meds(**vars(args))

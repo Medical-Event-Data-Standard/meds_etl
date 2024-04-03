@@ -15,7 +15,29 @@ conda create -n meds_etl
 ```
 Install the package
 ```bash
-python -m pip install .
+pip install meds_etl
+```
+
+## Backends
+
+ETLs are one of the most computationally heavy components of MEDS, so efficiency is very important.
+
+MEDS-ETL has several parallel implementations of core algorithms to balance the tradeoff between efficiency and ease of use.
+
+All commands generally take an additional parameter --backend, that allows users to switch between different backends.
+
+We currently support two backends polars (the default), and cpp.
+
+Backend information:
+
+- polars (default backend): A Python only implementation that only requires polars to run. The main issue with this implementation is that it is rather inefficient.
+
+- cpp: A custom C++ backend that requires the "meds_etl_cpp" package. Very efficient, but might not run on all platforms and has a limited feature set.
+
+If you want to use the native backend, make sure to install meds_etl with the optional native dependency.
+
+```bash
+pip install "meds_etl[cpp]"
 ```
 
 ## MIMIC-IV
