@@ -310,7 +310,7 @@ def process_table(args):
 
                 # Write this part of the MEDS Flat file to disk
                 fname = os.path.join(
-                    path_to_MEDS_flat_dir, f'{table_name.replace("/", "_")}_{map_index}_{batch_index}.parquet'
+                    path_to_MEDS_flat_dir, f'{table_name.replace("/", "_")}_{random.randint(0, 1e9)}.parquet'
                 )
                 event_data.write_parquet(fname)
 
