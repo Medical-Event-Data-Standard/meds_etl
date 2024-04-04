@@ -7,12 +7,12 @@ import random
 import shutil
 import subprocess
 import tempfile
+import uuid
 from typing import Any, Dict, List, Tuple
 
 import jsonschema
 import meds
 import polars as pl
-import pyarrow.parquet as pq
 from tqdm import tqdm
 
 import meds_etl
@@ -309,87 +309,9 @@ def process_table(args):
                 event_data = batch.select(**columns).collect()
 
                 # Write this part of the MEDS Flat file to disk
-                fname = os.path.join(
-                    path_to_MEDS_flat_dir, f'{table_name.replace("/", "_")}_{random.randint(0, 1e9)}.parquet'
-                )
+                postfix = str(uuid.uuid4())
+                fname = os.path.join(path_to_MEDS_flat_dir, f'{table_name.replace("/", "_")}_{postfix}.parquet')
                 event_data.write_parquet(fname)
-
-
-def process_shard(args: tuple[int, str, str]):
-    """Collect measurements across OMOP table shards into MEDS patient timelines
-
-    Args:
-        args (tuple): A tuple which contains the following positional variables:
-            shard_index (int): The shard index to which a subset of patient ID's are mapped,
-                used in `path_to_temp_dir` (see  below)
-            path_to_temp_dir (str): Path to the directory where sharded patient measurements are stored.
-                Measurements will be *read* from files in the shard subfolders in this directory.
-            path_to_data_dir (str): Path to the directory where MEDS timelines should be *written*.
-                See below for expected file naming convention.
-
-    Returns:
-        Nothing, but MEDS timelines for the given `shard_index` are written
-        to "{path_to_data_dir}/data_{shard_index}.parquet" and can be read in eg
-        as HuggingFace datasets.
-
-    Raises:
-        ValueError: If any important columns contain null/invalid values
-    """
-    shard_index, path_to_temp_dir, path_to_data_dir = args
-    path_to_shard_dir: str = os.path.join(path_to_temp_dir, str(shard_index))
-
-    # (Lazily) concatenate all OMOP table entries for the patients represented in the patient shard
-    events = [pl.scan_parquet(os.path.join(path_to_shard_dir, a)) for a in os.listdir(path_to_shard_dir)]
-    all_events = pl.concat(events, how="diagonal_relaxed")
-
-    # Verify that all important columns have no null entries
-    for important_column in ("patient_id", "time", "code"):
-        rows_with_invalid_code = all_events.filter(pl.col(important_column).is_null()).collect()
-        if len(rows_with_invalid_code) != 0:
-            print("Have rows with invalid " + important_column)
-            for row in rows_with_invalid_code:
-                print(row)
-            raise ValueError("Cannot have rows with invalid " + important_column)
-
-    # Aggregate measurements into events (lazy, not executed until `collect()`)
-    measurement = pl.struct(
-        code=pl.col("code"),
-        text_value=pl.col("text_value"),
-        numeric_value=pl.col("numeric_value"),
-        datetime_value=pl.col("datetime_value"),
-        metadata=pl.col("metadata"),
-    )
-
-    grouped_by_time = all_events.groupby("patient_id", "time").agg(measurements=measurement)
-
-    # Aggregate events into patient timelines (lazy, not executed until `collect()`)
-    event = pl.struct(
-        pl.col("time"),
-        pl.col("measurements"),
-    )
-
-    grouped_by_patient = grouped_by_time.groupby("patient_id").agg(events=event.sort_by(pl.col("time")))
-
-    # We now have our data in the final form, grouped_by_patient, but we have to do one final transformation
-    # We have to convert from polar's large_list to list because large_list is not supported by huggingface
-
-    # We do this conversion using the pyarrow library
-
-    # Save and load our data in order to convert to pyarrow library
-    converted = grouped_by_patient.collect().to_arrow()
-
-    # Now we need to reconstruct the schema
-    # We do this by pulling the metadata schema and then using meds.patient_schema
-    event_schema = converted.schema.field("events").type.value_type
-    measurement_schema = event_schema.field("measurements").type.value_type
-    metadata_schema = measurement_schema.field("metadata").type
-
-    desired_schema = meds.patient_schema(metadata_schema)
-
-    # All the large_lists are now converted to lists, so we are good to load with huggingface
-    casted = converted.cast(desired_schema)
-
-    pq.write_table(casted, os.path.join(path_to_data_dir, f"data_{shard_index}.parquet"))
 
 
 def extract_metadata(path_to_src_omop_dir: str, path_to_decompressed_dir: str, verbose: int = 0) -> Tuple:
