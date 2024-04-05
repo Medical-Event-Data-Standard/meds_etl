@@ -645,7 +645,7 @@ def main():
         shutil.rmtree(path_to_decompressed_dir)
 
         print("Finished converting OMOP => MEDS Flat.")
-
+        
     # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # #
     # Collate measurements into timelines for each patient, by shard
     # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # #

@@ -349,6 +349,7 @@ def process_shard_polars(args):
         metadata_schema = pa.struct([(column, pa.string()) for column in metadata_columns])
 
     desired_schema = meds.patient_schema(metadata_schema)
+    converted['static_measurements'] = [ [] for _ in range(len(converted))]
 
     # All the larg_lists are now converted to lists, so we are good to load with huggingface
     casted = converted.cast(desired_schema)
@@ -370,8 +371,6 @@ def process_shard_duckdb(args):
     if len(os.listdir(shard_dir)) == 0:
         return
     
-    # TODO (@Michael) -- Instead of COPY directly to .parquet,
-    # should we convert to polars via `.pl()` then apply the casting to MEDS schema?
     duckdb.sql(f"""
         DROP TABLE IF EXISTS all_events_{shard_index};
         CREATE TABLE all_events_{shard_index} AS SELECT * FROM '{shard_dir}/*.parquet';
@@ -379,7 +378,7 @@ def process_shard_duckdb(args):
             SELECT
                 patient_id,
                 list({{ 
-                    'time' : time, 
+                    'time' : TRY_CAST(time AS DATETIME), 
                     'measurements' : measurements 
                 }}) AS events
             FROM (
@@ -387,10 +386,10 @@ def process_shard_duckdb(args):
                     patient_id,
                     time,
                     list({{
-                        'code' : code, 
-                        'text_value' : text_value, 
-                        'numeric_value' : numeric_value, 
-                        'datetime_value' : datetime_value, 
+                        'code' : TRY_CAST(code AS STRING), 
+                        'text_value' : TRY_CAST(text_value AS STRING), 
+                        'numeric_value' : TRY_CAST(numeric_value AS DOUBLE), 
+                        'datetime_value' : TRY_CAST(datetime_value AS DATETIME), 
                         'metadata' : metadata 
                     }}) AS measurements
                 FROM all_events_{shard_index}
