@@ -284,6 +284,9 @@ def process_table(args):
                 if "note_id" in batch.columns:
                     metadata["note_id"] = pl.col("note_id")
 
+                if "care_site_id" in batch.columns:
+                    metadata["care_site_id"] = pl.col("care_site_id")
+
                 if (table_name + "_end_datetime") in batch.columns:
                     end = pl.col(table_name + "_end_datetime")
                     end = pl.coalesce(
