@@ -666,10 +666,10 @@ def main():
         src=os.path.join(args.path_to_dest_meds_dir, "result", "data"),
         dst=os.path.join(args.path_to_dest_meds_dir, "data"),
     )
-    shutil.rmtree(path=os.path.join(args.path_to_dest_meds_dir, "result"))
+    # shutil.rmtree(path=os.path.join(args.path_to_dest_meds_dir, "result"))
 
     print(f"Deleting temporary directory `{path_to_temp_dir}`")
-    shutil.rmtree(path_to_temp_dir)
+    # shutil.rmtree(path_to_temp_dir)
 
 
 if __name__ == "__main__":
