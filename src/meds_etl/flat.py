@@ -145,8 +145,18 @@ def transform_metadata(d, metadata_columns):
     return pl.struct(cols)
 
 
-def verify_shard(shard, event_file):
-    for important_column in ("patient_id", "time", "code"):
+def verify_shard(shard, event_file, important_columns=("patient_id", "time", "code")):
+    """Verify that every shard has non-null important columns
+
+    Args:
+        shard (pl.DataFrame): Polars dataframe where each row represents a measurement
+        event_file (str): Path to the source data for the shard, used only for logging/reporting
+        important_columns (Tuple[str]): Columns that should not have any null values
+    
+    Raises:
+        ValueError if any entries in any of the important columns are null
+    """
+    for important_column in important_columns:
         rows_with_invalid_code = shard.filter(pl.col(important_column).is_null())
         if len(rows_with_invalid_code) != 0:
             error_message = f"Have rows with invalid {important_column} in {event_file}"
@@ -181,24 +191,33 @@ def convert_generic_value_to_specific(generic_value: pl.Expr, time_formats) -> T
 def create_and_write_shards_from_table(
     table, temp_dir: str, num_shards: int, time_formats: Iterable[str], metadata_columns: List[str], filename: str
 ):
+    # Convert all the column names to lower case
     table = table.rename({c: c.lower() for c in table.columns})
 
+    # Convert patient IDs into integers
     patient_id = pl.col("patient_id").cast(pl.Int64())
+
+    # Convert time column into polars Datetime/`datetime[μs]` type
     time = pl.col("time")
     if table.schema["time"] == pl.Utf8():
+        # If the time column is a UTF-8 string, we parse it using the set of `time_formats` given
         time = pl.coalesce(
             [time.str.to_datetime(time_format, strict=False, time_unit="us") for time_format in time_formats]
-        )
+        )  # If the column format doesn't match anything in `time_formats` times will be None and cause error
     else:
+        # If it's not a UTF-8 string, we try to just use polars native `Datetime()` handling
         time = time.cast(pl.Datetime())
 
+    # Codes should be UTF-8 strings
     code = pl.col("code").cast(pl.Utf8())
 
+    # Deterimine the type of value in `value` column, split into `datetime_value`, `numeric_value`, and
+    # `text_value` into their appropriate types (or convert these three columns into appropriate types
+    # if they already exist).
     if "value" in table.columns:
         for sub_value in ("datetime_value", "numeric_value", "text_value"):
             if sub_value in table.columns:
                 raise ValueError("Cannot have both generic value and specific value columns")
-
         datetime_value, numeric_value, text_value = convert_generic_value_to_specific(pl.col("value"), time_formats)
     else:
         if "datetime_value" in table.columns:
@@ -225,14 +244,16 @@ def create_and_write_shards_from_table(
         else:
             text_value = pl.lit(None, dtype=pl.Utf8())
 
+    # Cast all metadata keys and values to UTF-8 strings
     metadata = {}
-
     for colname in table.columns:
         if colname not in KNOWN_COLUMNS:
             metadata[colname] = pl.col(colname).cast(pl.Utf8())
 
     metadata = transform_metadata(metadata, metadata_columns)
 
+    # Actually execute the typecast conversion, partition table into 
+    # shards based on hashed patient ID
     event_data = (
         table.select(
             patient_id=patient_id,
@@ -248,9 +269,9 @@ def create_and_write_shards_from_table(
         .partition_by(["shard"], as_dict=True, maintain_order=False)
     )
 
+    # Validate/verify each shard's important columns and write to disk
     for (shard_index,), shard in event_data.items():
         verify_shard(shard, filename)
-
         fname = os.path.join(temp_dir, str(shard_index), filename)
         shard.write_parquet(fname, compression="uncompressed")
 
@@ -310,11 +331,37 @@ def convert_flat_to_meds(
     backend: str = "polars",
     time_formats: Iterable[str] = ("%Y-%m-%d %H:%M:%S%.f", "%Y-%m-%d"),
 ) -> None:
+    """
+    Args:
+        source_flat_path (str): Path to directory where MEDS Flat files are stored, structured as follows:
+            {source_flat_path}
+            |-- metadata.json [OPTIONAL]
+            |-- flat_data
+                |-- {table_name}_{map_index}.parquet
+        target_meds_path (str): Path to directory the MEDS files (converted from MEDS Flat) should be stored
+        num_shards (str): Number of patient shards, more shards -> fewer patients per join, only relevant for polars
+        num_proc (int): Number of parallel processes 
+        time_formats (str): Expected possible datetime formats in the `time` column.
+    
+    Returns:
+        None
+    """
     if backend == "duckdb":
-        convert_flat_to_meds_duckdb(source_flat_path, target_meds_path, num_proc=num_proc)
+        convert_flat_to_meds_duckdb(
+            source_flat_path,
+            target_meds_path, 
+            num_proc=num_proc, 
+            time_formats=time_formats
+        )
     else:
         # Default to Polars
-        convert_flat_to_meds_polars(source_flat_path, target_meds_path, num_shards=num_shards, num_proc=num_proc)
+        convert_flat_to_meds_polars(
+            source_flat_path, 
+            target_meds_path, 
+            num_shards=num_shards, 
+            num_proc=num_proc, 
+            time_formats=time_formats
+        )
 
 
 def convert_flat_to_meds_polars(
@@ -324,6 +371,7 @@ def convert_flat_to_meds_polars(
     num_proc: int = 1,
     time_formats: Iterable[str] = ("%Y-%m-%d %H:%M:%S%.f", "%Y-%m-%d"),
 ) -> None:
+    """A polars implementation of convert_flat_to_meds"""
     if not os.path.exists(source_flat_path):
         raise ValueError(f'The source MEDS Flat folder ("{source_flat_path}") does not seem to exist?')
 
@@ -337,6 +385,7 @@ def convert_flat_to_meds_polars(
     temp_dir = os.path.join(target_meds_path, "temp")
     os.mkdir(temp_dir)
 
+    # Make a folder called `{shard_index}` for each `shard_index` within `temp_dir`
     for shard_index in range(num_shards):
         os.mkdir(os.path.join(temp_dir, str(shard_index)))
 
@@ -509,12 +558,19 @@ def convert_flat_to_meds_duckdb(
     temp_dir = os.path.join(target_meds_path, "temp")
     os.mkdir(temp_dir)
 
+    if not memory_limit:
+        # Set the memory limit to 95% of the available virtual memory by default
+        memory_limit = f"{int(psutil.virtual_memory().total / 1e9 * 0.95)}GB"
+
     conn = duckdb.connect()
 
     conn.sql(f"SET threads to {num_proc}")
     conn.sql("SET enable_progress_bar = true;")
     conn.sql("SET preserve_insertion_order = false;")
+    # See https://duckdb.org/docs/guides/performance/how_to_tune_workloads.html#spilling-to-disk
     conn.sql(f"SET temp_directory = '{temp_dir}';")
+    # See https://duckdb.org/docs/configuration/pragmas.html#memory-limit
+    conn.sql(f"SET memory_limit = '{memory_limit}';")
 
     if os.path.exists(os.path.join(source_flat_path, "metadata.json")):
         shutil.copyfile(
@@ -602,6 +658,20 @@ def convert_flat_to_meds_duckdb(
         all_views.append(f"SELECT * FROM v{i}")
         conn.sql(f"CREATE VIEW v{i} as SELECT {full_query} FROM '{task}'")
 
+    if len(all_views) > 500:
+        # We need to compress down to less than 500 to avoid file issues
+        print("There are too many source files, we need to consolidate some of them")
+
+        new_views = []
+
+        num_chunks = (len(all_views) + 500 - 1) // 500
+        for chunk_index in tqdm(range(num_chunks)):
+            partial_views = all_views[chunk_index * 500 : (chunk_index + 1) * 500]
+            conn.sql(f"CREATE TABLE t{chunk_index} as {' UNION ALL '.join(partial_views)}")
+            new_views.append(f"SELECT * FROM t{chunk_index}")
+
+        all_views = new_views
+    
     conn.sql(f"CREATE VIEW all_events as {' UNION ALL '.join(all_views)}")
 
     if len(metadata_columns) != 0:
@@ -633,7 +703,7 @@ def convert_flat_to_meds_duckdb(
     data_dir = os.path.join(target_meds_path, "data")
 
     print("Generating result")
-    conn.sql(f"copy joined to '{data_dir}' (format parquet, per_thread_output true, file_size_bytes 1e9)")
+    conn.sql(f"COPY joined TO '{data_dir}' (FORMAT PARQUET, PER_THREAD_OUTPUT true, FILE_SIZE_BYTES 1e9)")
 
     shutil.rmtree(temp_dir)
 
