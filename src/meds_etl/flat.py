@@ -5,14 +5,16 @@ import csv
 import functools
 import gzip
 import logging
+import math
 import multiprocessing
 import os
 import pathlib
+import psutil
 import random
 import shutil
 import subprocess
 import tempfile
-from typing import Iterable, List, Literal, Set, TextIO, Tuple, cast
+from typing import Iterable, List, Literal, Optional, Set, TextIO, Tuple, cast
 
 import duckdb
 import meds
@@ -326,9 +328,9 @@ def process_csv_file(
 def convert_flat_to_meds(
     source_flat_path: str,
     target_meds_path: str,
-    num_shards: int = 100,
+    num_shards: Optional[int] = None,
     num_proc: int = 1,
-    backend: str = "polars",
+    backend: str = "duckdb",
     time_formats: Iterable[str] = ("%Y-%m-%d %H:%M:%S%.f", "%Y-%m-%d"),
 ) -> None:
     """
@@ -350,6 +352,7 @@ def convert_flat_to_meds(
         convert_flat_to_meds_duckdb(
             source_flat_path,
             target_meds_path, 
+            num_shards=num_shards,
             num_proc=num_proc, 
             time_formats=time_formats
         )
@@ -362,6 +365,24 @@ def convert_flat_to_meds(
             num_proc=num_proc, 
             time_formats=time_formats
         )
+
+
+def select_reasonable_num_shards(
+        num_patients: int, 
+        memory_limit_GB: float = 16, 
+        patients_per_GB_RAM: float = 1000
+) -> int:
+    """Estimate number of shards to maximize throughput subject to memory constraints.
+
+    Selects a number of shards so as to pack as many patients as 
+    possible into a shard subject to a given memory limit (in gigabytes).
+    Assumes by default that it takes about 1GB of RAM to process 1000 patients.
+    The number of shards chosen is the smallest power of 2 such that there are no
+    more than `num_patients_per_shard` patients per shard, in expectation.
+    """
+    num_patients_per_shard = math.floor(memory_limit_GB) * patients_per_GB_RAM
+    num_shards = int(2 ** (math.ceil(math.log(num_patients / num_patients_per_shard, 2))))
+    return num_shards
 
 
 def convert_flat_to_meds_polars(
@@ -535,6 +556,7 @@ def convert_flat_to_meds_polars(
         desired_schema = meds.patient_schema(metadata_schema)
 
         # All the larg_lists are now converted to lists, so we are good to load with huggingface
+        # breakpoint()  # TODO
         casted = converted.cast(desired_schema)
 
         pq.write_table(casted, os.path.join(data_dir, f"data_{shard_index}.parquet"))
@@ -545,10 +567,14 @@ def convert_flat_to_meds_polars(
 def convert_flat_to_meds_duckdb(
     source_flat_path: str,
     target_meds_path: str,
+    num_shards: Optional[int] = None,
     num_proc: int = 1,
+    memory_limit_GB: int = 16,
     time_formats: Iterable[str] = ("%Y-%m-%d %H:%M:%S%.f", "%Y-%m-%d"),
 ) -> None:
     """A duckdb implementation of convert_flat_to_meds"""
+
+    print("Converting from MEDS Flat to MEDS using DuckDB with sharding...")
 
     if not os.path.exists(source_flat_path):
         raise ValueError(f'The source MEDS Flat folder ("{source_flat_path}") does not seem to exist?')
@@ -558,9 +584,12 @@ def convert_flat_to_meds_duckdb(
     temp_dir = os.path.join(target_meds_path, "temp")
     os.mkdir(temp_dir)
 
-    if not memory_limit:
+    data_dir = os.path.join(target_meds_path, "data")
+    os.mkdir(data_dir)
+
+    if not memory_limit_GB:
         # Set the memory limit to 95% of the available virtual memory by default
-        memory_limit = f"{int(psutil.virtual_memory().total / 1e9 * 0.95)}GB"
+        memory_limit_GB = f"{int(psutil.virtual_memory().total / 1e9 * 0.95)}GB"
 
     conn = duckdb.connect()
 
@@ -570,7 +599,7 @@ def convert_flat_to_meds_duckdb(
     # See https://duckdb.org/docs/guides/performance/how_to_tune_workloads.html#spilling-to-disk
     conn.sql(f"SET temp_directory = '{temp_dir}';")
     # See https://duckdb.org/docs/configuration/pragmas.html#memory-limit
-    conn.sql(f"SET memory_limit = '{memory_limit}';")
+    conn.sql(f"SET memory_limit = '{memory_limit_GB}GB';")
 
     if os.path.exists(os.path.join(source_flat_path, "metadata.json")):
         shutil.copyfile(
@@ -679,32 +708,56 @@ def convert_flat_to_meds_duckdb(
     else:
         metadata_str = "null"
 
-    conn.sql(
-        f"""
-        CREATE VIEW joined AS
-        SELECT patient_id, null as static_measurements, list({{'time': time, 'measurements': measurements}}) as events
-        FROM (
-            SELECT patient_id, time,
-                list({{
-                    'code': code,
-                    'text_value': text_value,
-                    'numeric_value': numeric_value,
-                    'datetime_value': datetime_value,
-                    'metadata': {metadata_str}}}
-                ) as measurements
+    # Get all patient ID's
+    patient_ids = conn.sql("SELECT DISTINCT patient_id FROM all_events").fetchall()
+    patient_ids = [t[0] for t in patient_ids]
+
+    if num_shards is None:
+        num_shards = select_reasonable_num_shards(len(patient_ids))
+
+    print(f"Using {num_shards} shards to collate patient timelines with DuckDB...")
+
+    for shard_index in range(num_shards):
+        shard_filter_query = f"""
+            CREATE TEMPORARY VIEW shard_{shard_index}_events AS
+            SELECT *
             FROM all_events
-            group by patient_id, time
-            order by time ASC
-        )
-        group by patient_id
-    """
-    )
+            WHERE hash(patient_id) % {num_shards} = {shard_index}
+        """
+        conn.sql(shard_filter_query)
 
-    data_dir = os.path.join(target_meds_path, "data")
+        create_joined_view_for_shard_query = f"""
+            CREATE VIEW shard_{shard_index}_joined AS
+            SELECT patient_id, null as static_measurements, list({{'time': time, 'measurements': measurements}}) as events
+            FROM (
+                SELECT patient_id, time,
+                    list({{
+                        'code': code,
+                        'text_value': text_value,
+                        'numeric_value': numeric_value,
+                        'datetime_value': datetime_value,
+                        'metadata': {metadata_str}}}
+                    ) as measurements
+                FROM shard_{shard_index}_events
+                GROUP BY patient_id, time
+                ORDER BY time ASC
+            )
+            GROUP BY patient_id
+        """
+        conn.sql(create_joined_view_for_shard_query)
 
-    print("Generating result")
-    conn.sql(f"COPY joined TO '{data_dir}' (FORMAT PARQUET, PER_THREAD_OUTPUT true, FILE_SIZE_BYTES 1e9)")
+        shard_output_path = os.path.join(target_meds_path, "data", f"data_{shard_index}.parquet")
 
+        # See https://duckdb.org/docs/guides/import/parquet_export.html
+        write_result_to_disk_query = f"COPY shard_{shard_index}_joined TO '{shard_output_path}' "
+        # See https://duckdb.org/docs/sql/statements/copy.html#copy--to-options and 
+        # https://duckdb.org/docs/data/parquet/tips.html
+        write_result_to_disk_query += "(FORMAT PARQUET)"
+        # We could use PER_THREAD_OUTPUT true but then it creates directories for each shard_output_path
+        # rather than just single file names and that introduces other complexities
+        # write_result_to_disk_query += "(FORMAT PARQUET, PER_THREAD_OUTPUT true, FILE_SIZE_BYTES 1e6)"
+        conn.sql(write_result_to_disk_query)
+    
     shutil.rmtree(temp_dir)
 
 
