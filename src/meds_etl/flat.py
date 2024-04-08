@@ -369,19 +369,43 @@ def convert_flat_to_meds(
 
 def select_reasonable_num_shards(
         num_patients: int, 
-        memory_limit_GB: float = 16, 
-        patients_per_GB_RAM: float = 1000
+        memory_limit_GB: float = 16.0,
+        patients_per_GB_RAM: float = 1000.0
 ) -> int:
-    """Estimate number of shards to maximize throughput subject to memory constraints.
-
-    Selects a number of shards so as to pack as many patients as 
-    possible into a shard subject to a given memory limit (in gigabytes).
-    Assumes by default that it takes about 1GB of RAM to process 1000 patients.
-    The number of shards chosen is the smallest power of 2 such that there are no
-    more than `num_patients_per_shard` patients per shard, in expectation.
     """
-    num_patients_per_shard = math.floor(memory_limit_GB) * patients_per_GB_RAM
-    num_shards = int(2 ** (math.ceil(math.log(num_patients / num_patients_per_shard, 2))))
+    Estimate the number of shards to maximize throughput subject to memory constraints.
+    
+    Selects a number of shards to pack as many patients as possible into a shard 
+    subject to a given memory limit (in gigabytes). Assumes it takes about 1GB of 
+    RAM to process a specified number of patients. The number of shards chosen 
+    is the smallest power of 2 such that there are no more than `num_patients_per_shard` 
+    patients per shard, in expectation.
+    
+    Args:
+        num_patients (int): The total number of patients to be processed.
+        memory_limit_GB (float): The memory limit for each shard in gigabytes.
+        patients_per_GB_RAM (float): The number of patients that can be processed per GB of RAM.
+    
+    Returns:
+        int: The calculated number of shards, adhering to the constraints.
+    
+    Raises:
+    ValueError: For negative or non-numeric inputs.
+    """
+    
+    # Basic input validation
+    if not isinstance(num_patients, int) or not isinstance(memory_limit_GB, float) or not isinstance(patients_per_GB_RAM, float):
+        raise TypeError("Inputs must be of type int for `num_patients` and float for `memory_limit_GB` and `patients_per_GB_RAM`.")
+    
+    if num_patients < 0 or memory_limit_GB <= 0 or patients_per_GB_RAM <= 0:
+        raise ValueError("All input values must be positive.")
+    
+    if num_patients == 0:
+        return 1  # Minimum of 1 shard to handle the case of 0 patients gracefully.
+    
+    num_patients_per_shard = memory_limit_GB * patients_per_GB_RAM
+    num_shards = int(2 ** (math.ceil(math.log(max(num_patients / num_patients_per_shard, 1), 2))))
+    
     return num_shards
 
 
@@ -556,7 +580,6 @@ def convert_flat_to_meds_polars(
         desired_schema = meds.patient_schema(metadata_schema)
 
         # All the larg_lists are now converted to lists, so we are good to load with huggingface
-        # breakpoint()  # TODO
         casted = converted.cast(desired_schema)
 
         pq.write_table(casted, os.path.join(data_dir, f"data_{shard_index}.parquet"))
@@ -686,7 +709,6 @@ def convert_flat_to_meds_duckdb(
 
         all_views.append(f"SELECT * FROM v{i}")
         conn.sql(f"CREATE VIEW v{i} as SELECT {full_query} FROM '{task}'")
-
     if len(all_views) > 500:
         # We need to compress down to less than 500 to avoid file issues
         print("There are too many source files, we need to consolidate some of them")
@@ -718,6 +740,7 @@ def convert_flat_to_meds_duckdb(
     print(f"Using {num_shards} shards to collate patient timelines with DuckDB...")
 
     for shard_index in range(num_shards):
+        # Could create a new column or view with precomputed hash(patient_id), but it's fast so ignoring for now
         shard_filter_query = f"""
             CREATE TEMPORARY VIEW shard_{shard_index}_events AS
             SELECT *
@@ -728,7 +751,7 @@ def convert_flat_to_meds_duckdb(
 
         create_joined_view_for_shard_query = f"""
             CREATE VIEW shard_{shard_index}_joined AS
-            SELECT patient_id, null as static_measurements, list({{'time': time, 'measurements': measurements}}) as events
+            SELECT patient_id, null as static_measurements, list({{'time': time, 'measurements': measurements}} ORDER BY time ASC) as events
             FROM (
                 SELECT patient_id, time,
                     list({{
@@ -740,13 +763,11 @@ def convert_flat_to_meds_duckdb(
                     ) as measurements
                 FROM shard_{shard_index}_events
                 GROUP BY patient_id, time
-                ORDER BY time ASC
             )
             GROUP BY patient_id
         """
         conn.sql(create_joined_view_for_shard_query)
-
-        shard_output_path = os.path.join(target_meds_path, "data", f"data_{shard_index}.parquet")
+        shard_output_path = os.path.join(data_dir, f"data_{shard_index}.parquet")
 
         # See https://duckdb.org/docs/guides/import/parquet_export.html
         write_result_to_disk_query = f"COPY shard_{shard_index}_joined TO '{shard_output_path}' "
@@ -757,7 +778,7 @@ def convert_flat_to_meds_duckdb(
         # rather than just single file names and that introduces other complexities
         # write_result_to_disk_query += "(FORMAT PARQUET, PER_THREAD_OUTPUT true, FILE_SIZE_BYTES 1e6)"
         conn.sql(write_result_to_disk_query)
-    
+
     shutil.rmtree(temp_dir)
 
 

@@ -192,7 +192,7 @@ def test_shuffle_polars(tmp_path: pathlib.Path):
 
     meds_dataset2 = tmp_path / "meds2"
 
-    meds_etl.flat.convert_flat_to_meds(str(meds_flat_dataset), str(meds_dataset2), num_shards=10)
+    meds_etl.flat.convert_flat_to_meds(str(meds_flat_dataset), str(meds_dataset2), num_shards=10, backend="polars")
 
     patient_table = pa.concat_tables(
         [pq.read_table(meds_dataset2 / "data" / i) for i in os.listdir(meds_dataset2 / "data")]
@@ -240,7 +240,7 @@ def test_shuffle_duckdb(tmp_path: pathlib.Path):
 
     meds_dataset2 = tmp_path / "meds2"
 
-    meds_etl.flat.convert_flat_to_meds(str(meds_flat_dataset), str(meds_dataset2), backend="duckdb")
+    meds_etl.flat.convert_flat_to_meds(str(meds_flat_dataset), str(meds_dataset2), backend="duckdb", num_shards=4, num_proc=2)
 
     patient_table = pa.concat_tables(
         [pq.read_table(meds_dataset2 / "data" / i) for i in os.listdir(meds_dataset2 / "data")]
