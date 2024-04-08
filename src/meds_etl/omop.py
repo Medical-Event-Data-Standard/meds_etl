@@ -7,6 +7,7 @@ import random
 import shutil
 import subprocess
 import tempfile
+import uuid
 from typing import Any, Dict, List, Tuple
 
 import jsonschema
@@ -25,6 +26,7 @@ DEFAULT_NOTE_CONCEPT_ID: int = 46235038
 DEFAULT_VISIT_DETAIL_CONCEPT_ID: int = 4203722
 
 
+
 def get_table_files(path_to_src_omop_dir: str, table_name: str, table_details={}) -> List[str]:
     """Retrieve all .csv/.csv.gz files for the OMOP table given by `table_name` in `path_to_src_omop_dir`
 
@@ -35,6 +37,7 @@ def get_table_files(path_to_src_omop_dir: str, table_name: str, table_details={}
     takes a path corresponding to an OMOP table with its standard name (e.g.,
     `condition_occurrence`, `measurement`, `observation`) and returns a list
     of paths, each of which represents a file e.g.,
+    of paths, each of which represents a file e.g.,
     [`measurement/000000000000.csv.gz`, `000000000001.csv.gz`, ..., `000000000152.csv.gz`]
     """
     if table_details.get("file_suffix"):
@@ -43,6 +46,11 @@ def get_table_files(path_to_src_omop_dir: str, table_name: str, table_details={}
     path_to_table: str = os.path.join(path_to_src_omop_dir, table_name)
 
     if os.path.exists(path_to_table) and os.path.isdir(path_to_table):
+        return [
+            os.path.join(path_to_table, a)
+            for a in os.listdir(path_to_table)
+            if a.endswith(".csv") or a.endswith(".csv.gz")
+        ]
         return [
             os.path.join(path_to_table, a)
             for a in os.listdir(path_to_table)
@@ -59,6 +67,7 @@ def get_table_files(path_to_src_omop_dir: str, table_name: str, table_details={}
 def load_file(path_to_decompressed_dir: str, fname: str) -> Any:
     """Load a file from disk, unzip into temporary decompressed directory if needed
 
+    Args:
     Args:
         path_to_decompressed_dir (str): Path where (temporary) decompressed file should be stored
         fname (str): Path to the (input) file that should be loaded from disk
@@ -86,6 +95,7 @@ def process_table(args):
         path_to_decompressed_dir,
         map_index,
         verbose,
+        verbose,
     ) = args
     """
 
@@ -102,6 +112,7 @@ def process_table(args):
                 table being processed that help determine how to map from the raw OMOP data
                 to the MEDS standard.
 
+
     """
     concept_id_map = pickle.loads(concept_id_map_data)  # 0.25 GB for STARR-OMOP
     concept_name_map = pickle.loads(concept_name_map_data)  # 0.5GB for STARR-OMOP
@@ -117,6 +128,7 @@ def process_table(args):
         table = pl.read_csv_batched(
             temp_f.name,  # The decompressed source table
             infer_schema_length=0,  # Don't try to automatically infer schema
+            batch_size=1_000_000,  # Read in 1M rows at a time
             batch_size=1_000_000,  # Read in 1M rows at a time
         )
 
@@ -140,6 +152,7 @@ def process_table(args):
                 # Determine what to use for the `patient_id` column in MEDS Flat  #
                 # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # #
 
+
                 # Define the MEDS Flat `patient_id` (left) to be the `person_id` columns in OMOP (right)
                 patient_id = pl.col("person_id").cast(pl.Int64)
 
@@ -149,6 +162,7 @@ def process_table(args):
 
                 # Use special processing for the `PERSON` OMOP table
                 if table_name == "person":
+                    # Take the `birth_datetime` if its available, otherwise
                     # Take the `birth_datetime` if its available, otherwise
                     # construct it from `year_of_birth`, `month_of_birth`, `day_of_birth`
                     time = pl.coalesce(
@@ -160,6 +174,8 @@ def process_table(args):
                         ),
                     )
                 else:
+                    # Use the OMOP table name + `_start_datetime` as the `time` column
+                    # if it's available otherwise `_start_date`, `_datetime`, `_date`
                     # Use the OMOP table name + `_start_datetime` as the `time` column
                     # if it's available otherwise `_start_date`, `_datetime`, `_date`
                     # in that order of preference
@@ -183,12 +199,14 @@ def process_table(args):
                 # Determine what to use for the `code` column in MEDS Flat  #
                 # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # #
 
+
                 if table_details.get("force_concept_id"):
                     # Rather than getting the concept ID from the source table, we use the concept ID
                     # passed in by the user eg `4083587` for `Birth`
                     concept_id = pl.lit(table_details["force_concept_id"], dtype=pl.Int64)
                     source_concept_id = pl.lit(0, dtype=pl.Int64)
                 else:
+                    # Try using the source concept ID, but if it's not available then use the concept ID
                     # Try using the source concept ID, but if it's not available then use the concept ID
                     concept_id_field = table_details.get("concept_id_field", table_name + "_concept_id")
                     concept_id = pl.col(concept_id_field).cast(pl.Int64)
@@ -198,6 +216,7 @@ def process_table(args):
                         )
                     else:
                         source_concept_id = pl.lit(0, dtype=pl.Int64)
+
 
                     # And if the source concept ID and concept ID aren't available, use `fallback_concept_id`
                     fallback_concept_id = pl.lit(table_details.get("fallback_concept_id", None), dtype=pl.Int64)
@@ -214,10 +233,13 @@ def process_table(args):
                 # based on the `concept_id_map`
                 code = concept_id.map_dict(concept_id_map)
 
+
                 # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # #
                 # Determine what to use for the `value` column in MEDS Flat   #
                 # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # #
 
+                # By default, if the user doesn't specify in `table_details`
+                # what the
                 # By default, if the user doesn't specify in `table_details`
                 # what the
                 value = pl.lit(None, dtype=str)
@@ -260,6 +282,7 @@ def process_table(args):
                 # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # #
                 # Determine the metadata columns to be stored in MEDS Flat  #
                 # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # #
+
 
                 # Every key in the `metadata` dictionary will become a distinct
                 # column in the MEDS Flat file; for each event, the metadata column
@@ -318,6 +341,10 @@ def extract_metadata(path_to_src_omop_dir: str, path_to_decompressed_dir: str, v
     concept_id_map: Dict[int, str] = {}  # [key] concept_id -> [value] concept_code
     concept_name_map: Dict[int, str] = {}  # [key] concept_id -> [value] concept_name
     code_metadata: Dict[str, Any] = {}  # [key] concept_code -> [value] metadata
+def extract_metadata(path_to_src_omop_dir: str, path_to_decompressed_dir: str, verbose: int = 0) -> Tuple:
+    concept_id_map: Dict[int, str] = {}  # [key] concept_id -> [value] concept_code
+    concept_name_map: Dict[int, str] = {}  # [key] concept_id -> [value] concept_name
+    code_metadata: Dict[str, Any] = {}  # [key] concept_code -> [value] metadata
 
     # Read in the OMOP `CONCEPT` table from disk
     # (see https://ohdsi.github.io/TheBookOfOhdsi/StandardizedVocabularies.html#concepts)
@@ -338,8 +365,11 @@ def extract_metadata(path_to_src_omop_dir: str, path_to_decompressed_dir: str, v
             # Convert the table into a dictionary
             result = concept.select(concept_id=concept_id, code=code, name=pl.col("concept_name"))
 
+            result = concept.select(concept_id=concept_id, code=code, name=pl.col("concept_name"))
+
             result = result.to_dict(as_series=False)
 
+            # Update our running dictionary with the concepts we read in from
             # Update our running dictionary with the concepts we read in from
             # the concept table shard
             concept_id_map |= dict(zip(result["concept_id"], result["code"]))
@@ -371,6 +401,16 @@ def extract_metadata(path_to_src_omop_dir: str, path_to_decompressed_dir: str, v
         if omop_birth_concept_id is not None and omop_death_concept_id is not None:
             break
 
+    if omop_birth_concept_id is None or omop_death_concept_id is None:
+        raise ValueError(
+            "The provided OMOP dataset is missing either the birth or death concept. \n"
+            + "Look for SNOMED codes "
+            + meds.birth_code
+            + " and "
+            + meds.death_code
+            + " within concept.csv"
+        )
+
     # Include map from custom concepts to normalized (ie standard ontology)
     # parent concepts, where possible, in the code_metadata dictionary
     for concept_relationship_file in get_table_files(path_to_src_omop_dir, "concept_relationship"):
@@ -392,6 +432,7 @@ def extract_metadata(path_to_src_omop_dir: str, path_to_decompressed_dir: str, v
             )
 
             for concept_id_1, concept_id_2 in zip(
+                custom_relationships["concept_id_1"], custom_relationships["concept_id_2"]
                 custom_relationships["concept_id_1"], custom_relationships["concept_id_2"]
             ):
                 if concept_id_1 in concept_id_map and concept_id_2 in concept_id_map:
@@ -420,6 +461,7 @@ def extract_metadata(path_to_src_omop_dir: str, path_to_decompressed_dir: str, v
     # should give a dictionary like
     # {'description': 'AMOXICILLIN/CLAVULANATE', 'parent_codes': ['LOINC/18862-3']}
     # where LOINC Code '18862-3' is a standard concept representing a lab test
+    # where LOINC Code '18862-3' is a standard concept representing a lab test
     # measurement determining microorganism susceptibility to Amoxicillin+clavulanic acid
 
     jsonschema.validate(instance=metadata, schema=meds.dataset_metadata)
@@ -429,16 +471,24 @@ def extract_metadata(path_to_src_omop_dir: str, path_to_decompressed_dir: str, v
 
 def main():
     parser = argparse.ArgumentParser(prog="meds_etl_omop", description="Performs an ETL from OMOP v5 to MEDS")
+    parser = argparse.ArgumentParser(prog="meds_etl_omop", description="Performs an ETL from OMOP v5 to MEDS")
     parser.add_argument(
+        "path_to_src_omop_dir",
         "path_to_src_omop_dir",
         type=str,
         help="Path to the OMOP source directory, e.g. "
         "`~/Downloads/data/som-rit-phi-starr-prod.starr_omop_cdm5_confidential_2023_11_19` "
         " for STARR-OMOP full or "
         "`~/Downloads/data/som-rit-phi-starr-prod.starr_omop_cdm5_confidential_1pcent_2024_02_09`",
+        "`~/Downloads/data/som-rit-phi-starr-prod.starr_omop_cdm5_confidential_2023_11_19` "
+        " for STARR-OMOP full or "
+        "`~/Downloads/data/som-rit-phi-starr-prod.starr_omop_cdm5_confidential_1pcent_2024_02_09`",
     )
     parser.add_argument("path_to_dest_meds_dir", type=str, help="Path to where the output MEDS files will be stored")
+    parser.add_argument("path_to_dest_meds_dir", type=str, help="Path to where the output MEDS files will be stored")
     parser.add_argument(
+        "--num_shards",
+        type=int,
         "--num_shards",
         type=int,
         default=100,
@@ -446,10 +496,17 @@ def main():
         "to MEDS (patients are distributed approximately uniformly at "
         "random across shards and collation/joining of OMOP tables is "
         "performed on a shard-by-shard basis).",
+        "to MEDS (patients are distributed approximately uniformly at "
+        "random across shards and collation/joining of OMOP tables is "
+        "performed on a shard-by-shard basis).",
     )
     parser.add_argument("--num_proc", type=int, default=1, help="Number of vCPUs to use for performing the MEDS ETL")
     parser.add_argument("--verbose", type=int, default=0)
+    parser.add_argument("--num_proc", type=int, default=1, help="Number of vCPUs to use for performing the MEDS ETL")
+    parser.add_argument("--verbose", type=int, default=0)
     parser.add_argument(
+        "--continue_job",
+        dest="continue_job",
         "--continue_job",
         dest="continue_job",
         action="store_true",
@@ -471,6 +528,7 @@ def main():
     # Create the directory where final MEDS files will go, if doesn't already exist
     os.makedirs(args.path_to_dest_meds_dir, exist_ok=True)
 
+
     # Within the target directory, create temporary subfolder for holding files
     # that need to be decompressed as part of the ETL (via eg `load_file`)
     path_to_decompressed_dir = os.path.join(args.path_to_dest_meds_dir, "decompressed")
@@ -483,16 +541,23 @@ def main():
         if os.path.exists(path_to_temp_dir):
             if args.verbose:
                 print(f"Deleting and recreating {path_to_temp_dir}")
+            if args.verbose:
+                print(f"Deleting and recreating {path_to_temp_dir}")
             shutil.rmtree(path_to_temp_dir)
         os.mkdir(path_to_temp_dir)
 
+
         if os.path.exists(path_to_MEDS_flat_dir):
+            if args.verbose:
+                print(f"Deleting and recreating {path_to_MEDS_flat_dir}")
             if args.verbose:
                 print(f"Deleting and recreating {path_to_MEDS_flat_dir}")
             shutil.rmtree(path_to_MEDS_flat_dir)
         os.mkdir(path_to_MEDS_flat_dir)
 
         if os.path.exists(path_to_decompressed_dir):
+            if args.verbose:
+                print(f"Deleting and recreating {path_to_decompressed_dir}")
             if args.verbose:
                 print(f"Deleting and recreating {path_to_decompressed_dir}")
             shutil.rmtree(path_to_decompressed_dir)
@@ -506,6 +571,7 @@ def main():
             path_to_src_omop_dir=args.path_to_src_omop_dir,
             path_to_decompressed_dir=path_to_decompressed_dir,
             verbose=args.verbose,
+            verbose=args.verbose,
         )
 
         # Save the extracted metadata file to disk...
@@ -516,6 +582,7 @@ def main():
         with open(os.path.join(args.path_to_dest_meds_dir, "metadata.json"), "w") as f:
             json.dump(metadata, f)
 
+        # # # # # # # # # # # # # # # # # # # # # # # # # # # # # #
         # # # # # # # # # # # # # # # # # # # # # # # # # # # # # #
         # Convert all "measurements" to MEDS Flat, write to disk  #
         # # # # # # # # # # # # # # # # # # # # # # # # # # # # # #
@@ -542,6 +609,7 @@ def main():
                 "concept_id_field": "drug_concept_id",
             },
             "visit": {"fallback_concept_id": DEFAULT_VISIT_CONCEPT_ID, "file_suffix": "occurrence"},
+            "visit": {"fallback_concept_id": DEFAULT_VISIT_CONCEPT_ID, "file_suffix": "occurrence"},
             "condition": {
                 "file_suffix": "occurrence",
             },
@@ -550,8 +618,10 @@ def main():
             },
             "procedure": {
                 "file_suffix": "occurrence",
+                "file_suffix": "occurrence",
             },
             "device_exposure": {
+                "concept_id_field": "device_concept_id",
                 "concept_id_field": "device_concept_id",
             },
             "measurement": {
@@ -574,6 +644,7 @@ def main():
             },
         }
 
+
         # Prepare concept_id_map and concept_name_map for parallel processing
         concept_id_map_data = pickle.dumps(concept_id_map)
         concept_name_map_data = pickle.dumps(concept_name_map)
@@ -585,6 +656,9 @@ def main():
         all_tasks = []
         for table_name, table_details in tables.items():
             table_files = get_table_files(
+                path_to_src_omop_dir=args.path_to_src_omop_dir,
+                table_name=table_name,
+                table_details=table_details[0] if isinstance(table_details, list) else table_details,
                 path_to_src_omop_dir=args.path_to_src_omop_dir,
                 table_name=table_name,
                 table_details=table_details[0] if isinstance(table_details, list) else table_details,
@@ -600,6 +674,7 @@ def main():
                     path_to_MEDS_flat_dir,
                     path_to_decompressed_dir,
                     map_index,
+                    args.verbose,
                     args.verbose,
                 )
                 for map_index, table_file in enumerate(table_files)
@@ -642,12 +717,16 @@ def main():
     shutil.move(
         src=os.path.join(args.path_to_dest_meds_dir, "result", "data"),
         dst=os.path.join(args.path_to_dest_meds_dir, "data"),
+        src=os.path.join(args.path_to_dest_meds_dir, "result", "data"),
+        dst=os.path.join(args.path_to_dest_meds_dir, "data"),
     )
     shutil.rmtree(path=os.path.join(args.path_to_dest_meds_dir, "result"))
 
     print(f"Deleting temporary directory `{path_to_temp_dir}`")
     shutil.rmtree(path_to_temp_dir)
 
+
+if __name__ == "__main__":
 
 if __name__ == "__main__":
     main()
