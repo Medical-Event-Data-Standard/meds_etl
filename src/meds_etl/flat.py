@@ -16,7 +16,10 @@ import subprocess
 import tempfile
 from typing import Iterable, List, Literal, Optional, Set, TextIO, Tuple, cast
 
-import duckdb
+try:
+    import duckdb
+except ImportError:
+    duckdb = None
 import meds
 import polars as pl
 import pyarrow as pa
@@ -119,20 +122,66 @@ def load_file(decompressed_dir: str, fname: str) -> TextIO:
         return open(fname)
 
 
-def get_csv_columns(event_file: str) -> Set[str]:
+def get_csv_columns(event_file: str) -> dict:
+    """
+    Reads the first line of a CSV file to extract column names, assuming all columns as strings.
+    
+    This function opens a CSV file, which can be optionally compressed with gzip, reads the first line to get
+    the column names, and assumes all columns to be of string data type since CSV files do not contain explicit 
+    type information.
+
+    Args:
+        event_file (str): The file path to the CSV file. It supports both regular and gzipped CSV files.
+
+    Returns:
+        dict: A dictionary where keys are column names and values are assumed data types ('string').
+
+    Raises:
+        FileNotFoundError: If the specified file does not exist or cannot be opened.
+        IOError: If there's an error reading from the file.
+    """
     if event_file.endswith(".gz"):
         with gzip.open(event_file, "rt") as f:
             reader = csv.reader(f)
-            return set(next(reader))
+            columns = next(reader)
     else:
         with open(event_file, "r") as f:
             reader = csv.reader(f)
-            return set(next(reader))
+            columns = next(reader)
+    
+    return {col: 'string' for col in columns}
 
 
-def get_parquet_columns(event_file: str) -> Set[str]:
+def get_parquet_columns(event_file: str) -> dict:
+    """
+    Extracts column names and their data types from a Parquet file schema.
+
+    This function reads the schema of a Parquet file to get column names and their respective data types.
+    It maps the Parquet data types to their string representations to facilitate processing in other parts
+    of the ETL pipeline.
+
+    Args:
+        event_file (str): The file path to the Parquet file. 
+
+    Returns:
+        dict: A dictionary where keys are column names from the Parquet file schema, and values are the 
+        data type of each column represented as a string.
+
+    Raises:
+        FileNotFoundError: If the specified Parquet file does not exist or cannot be opened.
+        IOError: If there's an error reading the file schema.
+
+    Example:
+        Suppose we have a Parquet file 'patient_data.parquet' with the following schema:
+            - patient_id (int64)
+            - name (string)
+            - visit_date (date32)
+
+        Calling `get_parquet_columns('patient_data.parquet')` would return:
+            {'patient_id': 'int64', 'name': 'string', 'visit_date': 'date32'}
+    """
     schema = pq.read_schema(event_file)
-    return set(schema.names)
+    return {name: str(schema.field(name).type) for name in schema.names}
 
 
 def transform_metadata(d, metadata_columns):
@@ -330,7 +379,7 @@ def convert_flat_to_meds(
     target_meds_path: str,
     num_shards: Optional[int] = None,
     num_proc: int = 1,
-    backend: str = "duckdb",
+    backend: str = "polars",
     time_formats: Iterable[str] = ("%Y-%m-%d %H:%M:%S%.f", "%Y-%m-%d"),
 ) -> None:
     """
@@ -365,48 +414,6 @@ def convert_flat_to_meds(
             num_proc=num_proc, 
             time_formats=time_formats
         )
-
-
-def select_reasonable_num_shards(
-        num_patients: int, 
-        memory_limit_GB: float = 16.0,
-        patients_per_GB_RAM: float = 1000.0
-) -> int:
-    """
-    Estimate the number of shards to maximize throughput subject to memory constraints.
-    
-    Selects a number of shards to pack as many patients as possible into a shard 
-    subject to a given memory limit (in gigabytes). Assumes it takes about 1GB of 
-    RAM to process a specified number of patients. The number of shards chosen 
-    is the smallest power of 2 such that there are no more than `num_patients_per_shard` 
-    patients per shard, in expectation.
-    
-    Args:
-        num_patients (int): The total number of patients to be processed.
-        memory_limit_GB (float): The memory limit for each shard in gigabytes.
-        patients_per_GB_RAM (float): The number of patients that can be processed per GB of RAM.
-    
-    Returns:
-        int: The calculated number of shards, adhering to the constraints.
-    
-    Raises:
-    ValueError: For negative or non-numeric inputs.
-    """
-    
-    # Basic input validation
-    if not isinstance(num_patients, int) or not isinstance(memory_limit_GB, float) or not isinstance(patients_per_GB_RAM, float):
-        raise TypeError("Inputs must be of type int for `num_patients` and float for `memory_limit_GB` and `patients_per_GB_RAM`.")
-    
-    if num_patients < 0 or memory_limit_GB <= 0 or patients_per_GB_RAM <= 0:
-        raise ValueError("All input values must be positive.")
-    
-    if num_patients == 0:
-        return 1  # Minimum of 1 shard to handle the case of 0 patients gracefully.
-    
-    num_patients_per_shard = memory_limit_GB * patients_per_GB_RAM
-    num_shards = int(2 ** (math.ceil(math.log(max(num_patients / num_patients_per_shard, 1), 2))))
-    
-    return num_shards
 
 
 def convert_flat_to_meds_polars(
@@ -456,14 +463,16 @@ def convert_flat_to_meds_polars(
     random.shuffle(parquet_tasks)
 
     if num_proc != 1:
-        with mp.get_context("spawn").Pool(num_proc, maxtasksperchild=1) as pool:
-            metadata_columns_set = set()
-            for columns in pool.imap_unordered(get_csv_columns, csv_tasks):
-                metadata_columns_set |= columns
-            for columns in pool.imap_unordered(get_parquet_columns, parquet_tasks):
-                metadata_columns_set |= columns
+        with mp.get_context("spawn").Pool(num_proc) as pool:
+            metadata_columns_info = dict()
+            for columns_info in pool.imap_unordered(get_csv_columns, csv_tasks):
+                metadata_columns_info.update(columns_info)
+            for columns_info in pool.imap_unordered(get_parquet_columns, parquet_tasks):
+                metadata_columns_info.update(columns_info)
 
-            metadata_columns_set -= KNOWN_COLUMNS
+            metadata_columns_set = metadata_columns_info.keys() - KNOWN_COLUMNS
+            # TODO: Ideally we'd support non-text metdata columns but for now we assert all metadata are strings
+            assert all([metadata_columns_info[k] in ('string', 'large_string') for k in metadata_columns_set]), "All metadata must be string type"
             metadata_columns = sorted(list(metadata_columns_set))
 
             csv_processor = functools.partial(
@@ -491,13 +500,15 @@ def convert_flat_to_meds_polars(
                 for _ in pool.imap_unordered(parquet_processor, parquet_tasks):
                     pbar.update()
     else:
-        metadata_columns_set = set()
+        metadata_columns_info = dict()
         for task in csv_tasks:
-            metadata_columns_set |= get_csv_columns(task)
+            metadata_columns_info.update(get_csv_columns(task))
         for task in parquet_tasks:
-            metadata_columns_set |= get_parquet_columns(task)
+            metadata_columns_info.update(get_parquet_columns(task))
 
-        metadata_columns_set -= KNOWN_COLUMNS
+        metadata_columns_set = metadata_columns_info.keys() - KNOWN_COLUMNS
+        # TODO: Ideally we'd support non-text metdata columns but for now we assert all metadata are strings
+        assert all([metadata_columns_info[k] in ('string', 'large_string') for k in metadata_columns_set]), "All metadata must be string type"
         metadata_columns = sorted(list(metadata_columns_set))
 
         csv_processor = functools.partial(
@@ -592,7 +603,7 @@ def convert_flat_to_meds_duckdb(
     target_meds_path: str,
     num_shards: Optional[int] = None,
     num_proc: int = 1,
-    memory_limit_GB: int = 16,
+    memory_limit_GB: Optional[int] = 16,
     time_formats: Iterable[str] = ("%Y-%m-%d %H:%M:%S%.f", "%Y-%m-%d"),
 ) -> None:
     """A duckdb implementation of convert_flat_to_meds"""
@@ -610,7 +621,7 @@ def convert_flat_to_meds_duckdb(
     data_dir = os.path.join(target_meds_path, "data")
     os.mkdir(data_dir)
 
-    if not memory_limit_GB:
+    if memory_limit_GB is None:
         # Set the memory limit to 95% of the available virtual memory by default
         memory_limit_GB = f"{int(psutil.virtual_memory().total / 1e9 * 0.95)}GB"
 
@@ -647,31 +658,30 @@ def convert_flat_to_meds_duckdb(
 
     all_views = []
 
-    metadata_columns_set = set()
-
+    # Collect all columns with their types
     tasks = []
-    all_columns = []
+    all_columns_with_types = []
     for task in csv_tasks:
-        all_columns.append(get_csv_columns(task))
+        all_columns_with_types.append(get_csv_columns(task))
         tasks.append(task)
 
     for task in parquet_tasks:
-        all_columns.append(get_parquet_columns(task))
+        all_columns_with_types.append(get_parquet_columns(task))
         tasks.append(task)
 
-    metadata_columns_set = {b for a in all_columns for b in a}
+    metadata_columns_set = {cols for table in all_columns_with_types for cols in table}
 
-    metadata_columns_set -= KNOWN_COLUMNS
+    metadata_columns_set = metadata_columns_set - KNOWN_COLUMNS
     metadata_columns = sorted(list(metadata_columns_set))
 
-    for i, (task, columns) in enumerate(zip(tasks, all_columns)):
+    for i, (task, columns_dtypes) in enumerate(zip(tasks, all_columns_with_types)):
         select_parts = []
 
         select_parts.append("cast(time as timestamp) as time")
         select_parts.append("cast(patient_id as int64) as patient_id")
         select_parts.append("cast(code as string) as code")
 
-        if "value" not in columns:
+        if "value" not in columns_dtypes.keys():
             select_parts.append("cast(datetime_value as timestamp) as datetime_value")
             select_parts.append("cast(numeric_value as float4) as numeric_value")
             select_parts.append("cast(text_value as string) as text_value")
@@ -700,8 +710,13 @@ def convert_flat_to_meds_duckdb(
             )
 
         for column in metadata_columns:
-            if column in columns:
-                select_parts.append(f'cast("{column}" as string) as "{column}"')
+            if column in columns_dtypes.keys():
+                # TODO: Support casting based on pyarrow type, currently breaks with type eg `large_string`
+                # because `large_string` is not a supported duckdb datatype. Just need to add a mapping from
+                # parquet-supported datatypes to duckdb-supported datatypes and cast accordingly. Then use:
+                # select_parts.append(f'cast("{column}" as {columns_dtypes[column]}) as "{column}"')
+                assert columns_dtypes[column] in ("string", "large_string"), "All metadata must be string type"
+                select_parts.append(column)
             else:
                 select_parts.append(f'cast(null as string) as "{column}"')
 
@@ -709,6 +724,7 @@ def convert_flat_to_meds_duckdb(
 
         all_views.append(f"SELECT * FROM v{i}")
         conn.sql(f"CREATE VIEW v{i} as SELECT {full_query} FROM '{task}'")
+    
     if len(all_views) > 500:
         # We need to compress down to less than 500 to avoid file issues
         print("There are too many source files, we need to consolidate some of them")
@@ -730,16 +746,9 @@ def convert_flat_to_meds_duckdb(
     else:
         metadata_str = "null"
 
-    # Get all patient ID's
-    patient_ids = conn.sql("SELECT DISTINCT patient_id FROM all_events").fetchall()
-    patient_ids = [t[0] for t in patient_ids]
-
-    if num_shards is None:
-        num_shards = select_reasonable_num_shards(len(patient_ids))
-
     print(f"Using {num_shards} shards to collate patient timelines with DuckDB...")
 
-    for shard_index in range(num_shards):
+    for shard_index in tqdm(range(num_shards), total=num_shards):
         # Could create a new column or view with precomputed hash(patient_id), but it's fast so ignoring for now
         shard_filter_query = f"""
             CREATE TEMPORARY VIEW shard_{shard_index}_events AS
@@ -788,5 +797,6 @@ def convert_flat_to_meds_main():
     parser.add_argument("target_meds_path", type=str)
     parser.add_argument("--num_shards", type=int, default=100)
     parser.add_argument("--num_proc", type=int, default=1)
+    parser.add_argument("--memory_limit_GB", type=int, default=16)
     args = parser.parse_args()
     convert_flat_to_meds(**vars(args))
