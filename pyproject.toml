@@ -16,7 +16,13 @@ dependencies = [
     "meds == 0.1.3",
     "typing_extensions >= 4.0",
     "datasets >= 2.0.0",
-    "tqdm >= 4.6.0"
+    "tqdm >= 4.6.0",
+    "psutil >= 5.9.0"
+]
+
+[project.optional-dependencies]
+duckdb = [
+    "duckdb >= 0.10.1"
 ]
 
 [project.scripts]

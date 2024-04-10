@@ -466,6 +466,12 @@ def main():
         help="If set, the job continues from a previous run, starting after the "
         "conversion to MEDS Flat but before converting from MEDS Flat to MEDS.",
     )
+    parser.add_argument(
+        "--backend",
+        type=str,
+        default="duckdb",
+        help="The backend to use for the ETL. See the MEDS-Flat ETL for details on the various backends available.",
+    )
 
     args = parser.parse_args()
 
@@ -613,7 +619,7 @@ def main():
 
         print("Decompressing OMOP tables, mapping to MEDS Flat format, writing to disk...")
         if args.num_proc > 1:
-            with multiprocessing.get_context("spawn").Pool(args.num_proc, maxtasksperchild=1) as pool:
+            with multiprocessing.get_context("spawn").Pool(args.num_proc) as pool:
                 # Wrap all tasks with tqdm for a progress bar
                 total_tasks = len(all_tasks)
                 with tqdm(total=total_tasks, desc="Mapping OMOP tables -> MEDS format") as pbar:
@@ -640,6 +646,7 @@ def main():
         target_meds_path=os.path.join(args.path_to_dest_meds_dir, "result"),
         num_shards=args.num_shards,
         num_proc=args.num_proc,
+        backend=args.backend,
     )
     print("...finished converting MEDS Flat to MEDS")
     shutil.move(
