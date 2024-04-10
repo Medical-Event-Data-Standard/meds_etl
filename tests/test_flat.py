@@ -11,9 +11,14 @@ import jsonschema
 import meds
 import pyarrow as pa
 import pyarrow.parquet as pq
+import pytest
 
 import meds_etl.flat
 
+try:
+    import duckdb
+except ImportError:
+    duckdb = None
 
 def get_random_patient(patient_id: int, include_metadata=True) -> meds.Patient:
     random.seed(patient_id)
@@ -108,6 +113,8 @@ def create_dataset(tmp_path: pathlib.Path, include_metadata=True):
 
 def roundtrip_helper(tmp_path: pathlib.Path, patients: List[meds.Patient], format: meds_etl.flat.Format, num_proc: int):
     for backend in ["duckdb", "polars"]:
+        if backend == "duckdb" and duckdb is None:
+            continue
         print("Testing", format, backend)
         meds_dataset = tmp_path / "meds"
         meds_flat_dataset = tmp_path / f"meds_flat_{format}_{num_proc}_{backend}"
@@ -207,6 +214,7 @@ def test_shuffle_polars(tmp_path: pathlib.Path):
     assert patients == final_patients
 
 
+@pytest.mark.skipif(duckdb is None, reason="duckdb not installed")
 def test_shuffle_duckdb(tmp_path: pathlib.Path):
     meds_dataset = tmp_path / "meds"
     create_dataset(meds_dataset)
