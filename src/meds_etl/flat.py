@@ -611,6 +611,11 @@ def convert_flat_to_meds_duckdb(
 
     print("Converting from MEDS Flat to MEDS using DuckDB with sharding...")
 
+    try:
+        conn = duckdb.connect()
+    except AttributeError as e:
+        raise ImportError("You invoked `duckdb` as backend but duckdb is not installed. Install it using pip.") from e
+    
     if not os.path.exists(source_flat_path):
         raise ValueError(f'The source MEDS Flat folder ("{source_flat_path}") does not seem to exist?')
 
@@ -625,8 +630,6 @@ def convert_flat_to_meds_duckdb(
     if memory_limit_GB is None:
         # Set the memory limit to 95% of the available virtual memory by default
         memory_limit_GB = f"{int(psutil.virtual_memory().total / 1e9 * 0.95)}GB"
-
-    conn = duckdb.connect()
 
     conn.sql(f"SET threads to {num_proc}")
     conn.sql("SET enable_progress_bar = true;")
