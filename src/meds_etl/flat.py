@@ -466,6 +466,7 @@ def convert_flat_to_meds_polars(
         with mp.get_context("spawn").Pool(num_proc) as pool:
             metadata_columns_info = dict()
             for columns_info in pool.imap_unordered(get_csv_columns, csv_tasks):
+                # TODO: Need to verify that types are consistent across files
                 metadata_columns_info.update(columns_info)
             for columns_info in pool.imap_unordered(get_parquet_columns, parquet_tasks):
                 metadata_columns_info.update(columns_info)
