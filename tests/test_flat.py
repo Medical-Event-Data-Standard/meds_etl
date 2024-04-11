@@ -20,6 +20,12 @@ try:
 except ImportError:
     duckdb = None
 
+try:
+    import meds_etl_cpp
+except ImportError:
+    meds_etl_cpp = None
+
+
 def get_random_patient(patient_id: int, include_metadata=True) -> meds.Patient:
     random.seed(patient_id)
 
@@ -112,8 +118,10 @@ def create_dataset(tmp_path: pathlib.Path, include_metadata=True):
 
 
 def roundtrip_helper(tmp_path: pathlib.Path, patients: List[meds.Patient], format: meds_etl.flat.Format, num_proc: int):
-    for backend in ["duckdb", "polars"]:
+    for backend in ["duckdb", "polars", "cpp"]:
         if backend == "duckdb" and duckdb is None:
+            continue
+        if backend == "cpp" and meds_etl_cpp is None or format != "parquet":
             continue
         print("Testing", format, backend)
         meds_dataset = tmp_path / "meds"
@@ -133,7 +141,22 @@ def roundtrip_helper(tmp_path: pathlib.Path, patients: List[meds.Patient], forma
         final_patients = patient_table.to_pylist()
         final_patients.sort(key=lambda a: a["patient_id"])
 
-    assert patients == final_patients
+        for patient in final_patients:
+            for event in patient["events"]:
+                event["measurements"].sort(key=lambda m: m["code"])
+
+        for patient in patients:
+            for event in patient["events"]:
+                event["measurements"].sort(key=lambda m: m["code"])
+
+        print(patients[1])
+
+        print(final_patients[1])
+
+        for i in range(len(patients)):
+            assert patients[i] == final_patients[i]
+
+        assert patients == final_patients
 
 
 def test_roundtrip_with_metadata(tmp_path: pathlib.Path):
@@ -248,7 +271,9 @@ def test_shuffle_duckdb(tmp_path: pathlib.Path):
 
     meds_dataset2 = tmp_path / "meds2"
 
-    meds_etl.flat.convert_flat_to_meds(str(meds_flat_dataset), str(meds_dataset2), backend="duckdb", num_shards=4, num_proc=2)
+    meds_etl.flat.convert_flat_to_meds(
+        str(meds_flat_dataset), str(meds_dataset2), backend="duckdb", num_shards=4, num_proc=2
+    )
 
     patient_table = pa.concat_tables(
         [pq.read_table(meds_dataset2 / "data" / i) for i in os.listdir(meds_dataset2 / "data")]

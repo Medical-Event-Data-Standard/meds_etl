@@ -24,6 +24,10 @@ dependencies = [
 duckdb = [
     "duckdb >= 0.10.1"
 ]
+cpp = [
+    "meds_etl_cpp == 0.1.2"
+]
+
 
 [project.scripts]
 meds_etl_mimic = "meds_etl.mimic:main"
