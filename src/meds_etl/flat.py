@@ -12,6 +12,7 @@ import random
 import shutil
 import subprocess
 import tempfile
+import warnings
 from typing import Iterable, List, Literal, Optional, TextIO, Tuple, cast
 
 import psutil
@@ -784,6 +785,12 @@ def convert_flat_to_meds(
     Returns:
         None
     """
+    if backend == "polars":
+        warnings.warn(
+            "The Polars backend in MEDS-ETL works, but is very slow."
+            + "We recommend users use either the cpp or duckdb backend. See the README for details."
+        )
+
     if not os.path.exists(source_flat_path):
         raise ValueError(f'The source MEDS Flat folder ("{source_flat_path}") does not seem to exist?')
 
@@ -792,6 +799,7 @@ def convert_flat_to_meds(
 
         meds_etl_cpp.perform_etl(source_flat_path, target_meds_path, num_shards)
     elif backend == "duckdb":
+        assert duckdb is not None
         convert_flat_to_meds_duckdb(
             source_flat_path,
             target_meds_path,

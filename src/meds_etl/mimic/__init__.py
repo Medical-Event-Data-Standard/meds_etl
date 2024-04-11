@@ -354,12 +354,15 @@ def main():
             )
 
             patient_id = pl.col("subject_id").cast(pl.Int64)
-            time = mapping_code["time"]
+            time = meds_etl.flat.parse_time(mapping_code["time"], MIMIC_TIME_FORMATS)
+
             code = mapping_code["code"]
             if "value" in mapping_code:
                 value = mapping_code["value"]
             else:
                 value = pl.lit(None, dtype=str)
+
+            d, n, t = meds_etl.flat.convert_generic_value_to_specific(value)
 
             if "metadata" not in mapping_code:
                 mapping_code["metadata"] = {}
@@ -384,15 +387,11 @@ def main():
                 if mapping_code.get("possibly_null_time", False):
                     table_csv = table_csv.filter(time.is_not_null())
 
-                time = meds_etl.flat.parse_time(time, MIMIC_TIME_FORMATS)
-
                 columns = {
                     "patient_id": patient_id,
                     "time": time,
                     "code": code,
                 }
-
-                d, n, t = meds_etl.flat.convert_generic_value_to_specific(value)
 
                 columns["datetime_value"] = d
                 columns["numeric_value"] = n
@@ -401,7 +400,12 @@ def main():
                 for k, v in mapping_code["metadata"].items():
                     columns[k] = v.alias(k)
 
-                event_data = table_csv.select(**columns).collect()
+                try:
+                    event_data = table_csv.select(**columns).collect()
+                except Exception as e:
+                    print("Could not process", table_name, mapping_codes)
+                    print(columns)
+                    raise e
 
                 fname = os.path.join(
                     temp_dir, "flat_data", f'{table_name.replace("/", "_")}_{map_index}_{batch_index}.parquet'
