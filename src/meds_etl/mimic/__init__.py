@@ -392,7 +392,7 @@ def main():
                     "code": code,
                 }
 
-                d, n, t = meds_etl.flat.convert_generic_value_to_specific(value, MIMIC_TIME_FORMATS)
+                d, n, t = meds_etl.flat.convert_generic_value_to_specific(value)
 
                 columns["datetime_value"] = d
                 columns["numeric_value"] = n
