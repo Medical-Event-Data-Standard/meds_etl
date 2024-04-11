@@ -86,6 +86,7 @@ def process_table(args):
         path_to_MEDS_flat_dir,
         path_to_decompressed_dir,
         map_index,
+        is_prefer_standard_concept_ids,
         verbose,
     ) = args
     """
@@ -203,17 +204,28 @@ def process_table(args):
                     # And if the source concept ID and concept ID aren't available, use `fallback_concept_id`
                     fallback_concept_id = pl.lit(table_details.get("fallback_concept_id", None), dtype=pl.Int64)
 
-                    concept_id = (
-                        pl.when(source_concept_id != 0)
-                        .then(source_concept_id)
-                        .when(concept_id != 0)
-                        .then(concept_id)
-                        .otherwise(fallback_concept_id)
-                    )
+                    if is_prefer_standard_concept_ids:
+                        # Prefer standard concept IDs over source concept IDs
+                        concept_id = (
+                            pl.when(concept_id != 0)
+                            .then(concept_id)
+                            .when(source_concept_id != 0)
+                            .then(source_concept_id)
+                            .otherwise(fallback_concept_id)
+                        )
+                    else:
+                        # Prefer source concept IDs over standard concept IDs
+                        concept_id = (
+                            pl.when(source_concept_id != 0)
+                            .then(source_concept_id)
+                            .when(concept_id != 0)
+                            .then(concept_id)
+                            .otherwise(fallback_concept_id)
+                        )
 
                 # Replace values in `concept_id` with the normalized concepts to which they are mapped
                 # based on the `concept_id_map`
-                code = concept_id.map_dict(concept_id_map)
+                code = concept_id.replace(concept_id_map, default=None)
 
                 # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # #
                 # Determine what to use for the `value` column in MEDS Flat   #
@@ -459,6 +471,10 @@ def main():
     )
     parser.add_argument("--num_proc", type=int, default=1, help="Number of vCPUs to use for performing the MEDS ETL")
     parser.add_argument("--verbose", type=int, default=0)
+    parser.add_argument("--is_prefer_standard_concept_ids", 
+                        action="store_true",
+                        default=False,
+                        help="If set, the ETL will prefer standard concept IDs over source concept IDs.")
     parser.add_argument(
         "--continue_job",
         dest="continue_job",
@@ -610,6 +626,7 @@ def main():
                     path_to_MEDS_flat_dir,
                     path_to_decompressed_dir,
                     map_index,
+                    args.is_prefer_standard_concept_ids,
                     args.verbose,
                 )
                 for map_index, table_file in enumerate(table_files)
