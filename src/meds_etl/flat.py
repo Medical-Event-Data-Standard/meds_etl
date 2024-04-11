@@ -673,6 +673,9 @@ def convert_flat_to_meds_duckdb(
         all_columns_with_types.append(get_parquet_columns(task))
         tasks.append(task)
 
+    if len(tasks) == 0:
+        raise ValueError(f"No MEDS Flat files found -- double check that the directory '{source_flat_path}/flat_data' is not empty")
+
     metadata_columns_set = {cols for table in all_columns_with_types for cols in table}
 
     metadata_columns_set = metadata_columns_set - KNOWN_COLUMNS
