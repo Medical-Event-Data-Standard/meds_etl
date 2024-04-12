@@ -788,16 +788,16 @@ def convert_flat_to_meds(
     if backend == "polars":
         warnings.warn(
             "The Polars backend in MEDS-ETL works, but is very slow."
-            + "We recommend users use either the cpp or duckdb backend. See the README for details."
+            + " We recommend users use either the cpp or duckdb backend. See the README for details."
         )
 
     if not os.path.exists(source_flat_path):
         raise ValueError(f'The source MEDS Flat folder ("{source_flat_path}") does not seem to exist?')
-    
-    if not os.path.exists(os.path.join(source_flat_path, 'metadata.json')):
+
+    if not os.path.exists(os.path.join(source_flat_path, "metadata.json")):
         raise ValueError(f'The source MEDS Flat folder ("{source_flat_path}") does not have a metadata file?')
 
-    if not os.path.exists(os.path.join(source_flat_path, 'flat_data')):
+    if not os.path.exists(os.path.join(source_flat_path, "flat_data")):
         raise ValueError(f'The source MEDS Flat folder ("{source_flat_path}") does not have a flat_data folder')
 
     if backend == "cpp":

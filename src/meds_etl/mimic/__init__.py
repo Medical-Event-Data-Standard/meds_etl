@@ -418,6 +418,9 @@ def main():
 
     print("Processing each shard")
 
+    with open(os.path.join(temp_dir, "metadata.json"), "w") as f:
+        f.write("{}\n")
+
     meds_etl.flat.convert_flat_to_meds(
         temp_dir,
         os.path.join(args.destination, "result"),
@@ -425,6 +428,7 @@ def main():
         num_proc=args.num_proc,
         backend=args.backend,
     )
+
     shutil.move(os.path.join(args.destination, "result", "data"), os.path.join(args.destination, "data"))
     shutil.rmtree(os.path.join(args.destination, "result"))
 
