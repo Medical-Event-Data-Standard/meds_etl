@@ -26,7 +26,7 @@ MEDS-ETL has several parallel implementations of core algorithms to balance the 
 
 All commands generally take an additional parameter --backend, that allows users to switch between different backends.
 
-We currently support three backends: polars (the default), cpp, and duckdb.
+We currently support two backends: polars (the default) and cpp.
 
 Backend information:
 
@@ -34,18 +34,11 @@ Backend information:
 
 - cpp: A custom C++ backend. This backend is very efficient, but might not run on all platforms and has a limited feature set. It's recommended to use the same number of shards as you have CPUs available.
 
-- duckdb: A Python backend that uses duckdb for processing instead of polars. This implementation only works well when the number of shards is very low, but it is super quick with low shard counts.
-
-If you want to use either the cpp or duckdb backend, make sure to install meds_etl with the correct optional dependencies.
+If you want to use either the cpp backend, make sure to install meds_etl with the correct optional dependencies.
 
 ```bash
 # For the cpp backend
 pip install "meds_etl[cpp]"
-```
-
-```bash
-# For the duckdb backend
-pip install "meds_etl[duckdb]"
 ```
 
 ## MIMIC-IV
