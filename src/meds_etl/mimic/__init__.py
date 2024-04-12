@@ -467,7 +467,7 @@ def main():
 
     for fname, mapping_info in code_metadata_files.items():
         with files("meds_etl.mimic.concept_map").joinpath(fname + ".csv").open("rb") as f:
-            table = pl.read_csv(f, infer_schema_length=0)
+            table = pl.read_csv(f.read(), infer_schema_length=0)
             code_and_value = table.select(
                 code=mapping_info["code"], descr=mapping_info["descr"], parent=mapping_info["parent"]
             )
