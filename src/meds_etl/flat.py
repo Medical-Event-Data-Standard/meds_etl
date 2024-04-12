@@ -793,6 +793,12 @@ def convert_flat_to_meds(
 
     if not os.path.exists(source_flat_path):
         raise ValueError(f'The source MEDS Flat folder ("{source_flat_path}") does not seem to exist?')
+    
+    if not os.path.exists(os.path.join(source_flat_path, 'metadata.json')):
+        raise ValueError(f'The source MEDS Flat folder ("{source_flat_path}") does not have a metadata file?')
+
+    if not os.path.exists(os.path.join(source_flat_path, 'flat_data')):
+        raise ValueError(f'The source MEDS Flat folder ("{source_flat_path}") does not have a flat_data folder')
 
     if backend == "cpp":
         import meds_etl_cpp
