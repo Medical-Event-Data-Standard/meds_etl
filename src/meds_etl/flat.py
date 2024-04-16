@@ -74,9 +74,19 @@ def convert_meds_to_flat(
     time_format: str = "%Y-%m-%d %H:%M:%S%.f",
 ) -> None:
     """Convert an entire MEDS dataset to MEDS Flat"""
+
+    if not os.path.exists(source_meds_path):
+        raise ValueError(f'The source MEDS folder ("{source_meds_path}") does not seem to exist?')
+
     os.mkdir(target_flat_path)
 
     source_meds_data_path = os.path.join(source_meds_path, "data")
+    if not os.path.exists(source_meds_data_path):
+        raise ValueError(
+            f'The source MEDS folder ("{source_meds_path}") '
+            f'does not seem to contain a data folder ("{source_meds_data_path}")?'
+        )
+
     source_files = os.listdir(source_meds_data_path)
     tasks = [os.path.join(source_meds_data_path, source_file) for source_file in source_files]
 
