@@ -289,6 +289,11 @@ def write_event_data(
             end = cast_to_datetime(batch, table_name + "_end_datetime", move_to_end_of_day=True)
             metadata["end"] = end
 
+        if 'discharged_to_concept_id' in batch.columns:
+            metadata['discharge_facility'] = (
+                pl.coalesce(pl.col('discharged_to_concept_id'), 0).replace(concept_id_map)
+            )
+
         batch = batch.filter(code.is_not_null())
 
         columns = {
