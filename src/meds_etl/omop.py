@@ -723,9 +723,9 @@ def main():
                 for table_files in split_list(parquet_table_files, args.num_shards)
             )
 
-        random.seed(RANDOM_SEED)
-        random.shuffle(all_csv_tasks)
-        random.shuffle(all_parquet_tasks)
+        rng = random.Random(RANDOM_SEED)
+        rng.shuffle(all_csv_tasks)
+        rng.shuffle(all_parquet_tasks)
 
         print("Decompressing OMOP tables, mapping to MEDS Flat format, writing to disk...")
         if args.num_proc > 1:
