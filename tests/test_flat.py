@@ -26,7 +26,7 @@ except ImportError:
     meds_etl_cpp = None
 
 
-def get_random_patient(patient_id: int, include_metadata=True) -> meds.Patient:
+def get_random_patient(patient_id: int, include_properties=True) -> meds.Patient:
     random.seed(patient_id)
 
     epoch = datetime.datetime(1990, 1, 1)
@@ -40,14 +40,9 @@ def get_random_patient(patient_id: int, include_metadata=True) -> meds.Patient:
     patient = {
         "patient_id": patient_id,
         "events": [
-            {
-                "time": birth,
-                "measurements": [
-                    {"code": meds.birth_code, "metadata": {}},
-                    {"code": gender, "metadata": {}},
-                    {"code": race, "metadata": {}},
-                ],
-            },
+            {"time": birth, "code": meds.birth_code, "properties": {}},
+            {"time": birth, "code": gender, "properties": {}},
+            {"time": birth, "code": race, "properties": {}},
         ],
     }
     code_cats = ["ICD9CM", "RxNorm"]
@@ -61,41 +56,38 @@ def get_random_patient(patient_id: int, include_metadata=True) -> meds.Patient:
                 code = code[:3] + "." + code[3:]
         current_date = current_date + datetime.timedelta(days=random.randint(1, 100))
         code = code_cat + "/" + code
-        patient["events"].append(
-            {"time": current_date, "measurements": [{"code": code, "metadata": {"ontology": code_cat}}]}
-        )
+        patient["events"].append({"time": current_date, "code": code, "properties": {"ontology": code_cat}})
 
-    if not include_metadata:
+    if not include_properties:
         for e in patient["events"]:
-            for m in e["measurements"]:
-                if "metadata" in m:
-                    del m["metadata"]
+            if "properties" in e:
+                del e["properties"]
 
     return patient
 
 
-def create_example_patients(include_metadata=True):
+def create_example_patients(include_properties=True):
     patients = []
     for i in range(200):
-        patients.append(get_random_patient(i, include_metadata=include_metadata))
+        patients.append(get_random_patient(i, include_properties=include_properties))
     return patients
 
 
-def create_dataset(tmp_path: pathlib.Path, include_metadata=True):
+def create_dataset(tmp_path: pathlib.Path, include_properties=True):
     os.makedirs(tmp_path / "data", exist_ok=True)
 
-    if not include_metadata:
-        metadata_schema = pa.null()
+    if not include_properties:
+        properties_schema = pa.null()
     else:
-        metadata_schema = pa.struct(
+        properties_schema = pa.struct(
             [
                 ("ontology", pa.string()),
                 ("dummy", pa.string()),
             ]
         )
 
-    patients = create_example_patients(include_metadata=include_metadata)
-    patient_schema = meds.patient_schema(metadata_schema)
+    patients = create_example_patients(include_properties=include_properties)
+    patient_schema = meds.patient_schema(properties_schema)
 
     patient_table = pa.Table.from_pylist(patients, patient_schema)
 
@@ -142,12 +134,10 @@ def roundtrip_helper(tmp_path: pathlib.Path, patients: List[meds.Patient], forma
         final_patients.sort(key=lambda a: a["patient_id"])
 
         for patient in final_patients:
-            for event in patient["events"]:
-                event["measurements"].sort(key=lambda m: m["code"])
+            patient["events"].sort(key=lambda m: m["code"])
 
         for patient in patients:
-            for event in patient["events"]:
-                event["measurements"].sort(key=lambda m: m["code"])
+            patient["events"].sort(key=lambda m: m["code"])
 
         print(patients[1])
 
@@ -159,7 +149,7 @@ def roundtrip_helper(tmp_path: pathlib.Path, patients: List[meds.Patient], forma
         assert patients == final_patients
 
 
-def test_roundtrip_with_metadata(tmp_path: pathlib.Path):
+def test_roundtrip_with_properties(tmp_path: pathlib.Path):
     meds_dataset = tmp_path / "meds"
     create_dataset(meds_dataset)
     patients = pq.read_table(meds_dataset / "data" / "patients.parquet").to_pylist()
@@ -174,9 +164,9 @@ def test_roundtrip_with_metadata(tmp_path: pathlib.Path):
     roundtrip_helper(tmp_path, patients, "parquet", 4)
 
 
-def test_roundtrip_no_metadata(tmp_path: pathlib.Path):
+def test_roundtrip_no_properties(tmp_path: pathlib.Path):
     meds_dataset = tmp_path / "meds"
-    create_dataset(meds_dataset, include_metadata=False)
+    create_dataset(meds_dataset, include_properties=False)
     patients = pq.read_table(meds_dataset / "data" / "patients.parquet").to_pylist()
     patients.sort(key=lambda a: a["patient_id"])
 
@@ -196,8 +186,7 @@ def test_shuffle_polars(tmp_path: pathlib.Path):
     patients = pq.read_table(meds_dataset / "data" / "patients.parquet").to_pylist()
     patients.sort(key=lambda a: a["patient_id"])
     for patient in patients:
-        for event in patient["events"]:
-            event["measurements"].sort(key=lambda m: m["code"])
+        patient["events"].sort(key=lambda m: m["code"])
 
     meds_flat_dataset = tmp_path / "meds_flat"
     meds_etl.flat.convert_meds_to_flat(str(meds_dataset), str(meds_flat_dataset), format="csv")
@@ -231,8 +220,7 @@ def test_shuffle_polars(tmp_path: pathlib.Path):
     final_patients = patient_table.to_pylist()
     final_patients.sort(key=lambda a: a["patient_id"])
     for patient in final_patients:
-        for event in patient["events"]:
-            event["measurements"].sort(key=lambda m: m["code"])
+        patient["events"].sort(key=lambda m: m["code"])
 
     assert patients == final_patients
 
@@ -245,8 +233,7 @@ def test_shuffle_duckdb(tmp_path: pathlib.Path):
     patients = pq.read_table(meds_dataset / "data" / "patients.parquet").to_pylist()
     patients.sort(key=lambda a: a["patient_id"])
     for patient in patients:
-        for event in patient["events"]:
-            event["measurements"].sort(key=lambda m: m["code"])
+        patient["events"].sort(key=lambda m: m["code"])
 
     meds_flat_dataset = tmp_path / "meds_flat"
     meds_etl.flat.convert_meds_to_flat(str(meds_dataset), str(meds_flat_dataset), format="csv")
@@ -282,7 +269,6 @@ def test_shuffle_duckdb(tmp_path: pathlib.Path):
     final_patients = patient_table.to_pylist()
     final_patients.sort(key=lambda a: a["patient_id"])
     for patient in final_patients:
-        for event in patient["events"]:
-            event["measurements"].sort(key=lambda m: m["code"])
+        patient["events"].sort(key=lambda m: m["code"])
 
     assert patients == final_patients

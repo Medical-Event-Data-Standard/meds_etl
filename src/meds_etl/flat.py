@@ -40,18 +40,13 @@ def convert_file_to_flat(source_file: str, *, target_flat_data_path: str, format
     """Convert a single MEDS file to MEDS Flat"""
     table = pl.scan_parquet(source_file)
 
-    table = table.drop("static_measurements")
-
     table = table.explode("events")
     table = table.unnest("events")
 
-    table = table.explode("measurements")
-    table = table.unnest("measurements")
-
-    if table.schema["metadata"] == pl.Null():
-        table = table.drop("metadata")
+    if table.schema["properties"] == pl.Null():
+        table = table.drop("properties")
     else:
-        table = table.unnest("metadata")
+        table = table.unnest("properties")
 
     if format == "parquet":
         table.sink_parquet(os.path.join(target_flat_data_path, pathlib.Path(source_file).with_suffix(".parquet").name))
@@ -195,12 +190,12 @@ def get_parquet_columns(event_file: str) -> dict:
     return {name: str(schema.field(name).type) for name in schema.names}
 
 
-def transform_metadata(d, metadata_columns):
-    if len(metadata_columns) == 0:
+def transform_properties(d, properties_columns):
+    if len(properties_columns) == 0:
         return pl.lit(None)
 
     cols = []
-    for column in metadata_columns:
+    for column in properties_columns:
         val = d.get(column, pl.lit(None, dtype=pl.Utf8))
         cols.append(val.alias(column))
 
@@ -256,7 +251,7 @@ def convert_generic_value_to_specific(generic_value: pl.Expr) -> Tuple[pl.Expr, 
 
 
 def create_and_write_shards_from_table(
-    table, temp_dir: str, num_shards: int, time_formats: Iterable[str], metadata_columns: List[str], filename: str
+    table, temp_dir: str, num_shards: int, time_formats: Iterable[str], property_columns: List[str], filename: str
 ):
     # Convert all the column names to lower case
     table = table.rename({c: c.lower() for c in table.columns})
@@ -309,12 +304,12 @@ def create_and_write_shards_from_table(
             text_value = pl.lit(None, dtype=pl.Utf8())
 
     # Cast all metadata keys and values to UTF-8 strings
-    metadata = {}
+    properties = {}
     for colname in table.columns:
         if colname not in KNOWN_COLUMNS:
-            metadata[colname] = pl.col(colname).cast(pl.Utf8())
+            properties[colname] = pl.col(colname).cast(pl.Utf8())
 
-    metadata = transform_metadata(metadata, metadata_columns)
+    properties = transform_properties(properties, property_columns)
 
     # Actually execute the typecast conversion, partition table into
     # shards based on hashed patient ID
@@ -326,7 +321,7 @@ def create_and_write_shards_from_table(
             text_value=text_value,
             numeric_value=numeric_value,
             datetime_value=datetime_value,
-            metadata=metadata,
+            properties=properties,
             shard=patient_id.hash(213345) % num_shards,
         )
         .collect()
@@ -341,7 +336,7 @@ def create_and_write_shards_from_table(
 
 
 def process_parquet_file(
-    event_file: str, *, temp_dir: str, num_shards: int, time_formats: Iterable[str], metadata_columns: List[str]
+    event_file: str, *, temp_dir: str, num_shards: int, time_formats: Iterable[str], property_columns: List[str]
 ):
     """Partition MEDS Flat files into shards based on patient ID and write to disk"""
     logging.info("Working on ", event_file)
@@ -350,7 +345,7 @@ def process_parquet_file(
 
     cleaned_event_file = os.path.basename(event_file).split(".")[0]
     fname = f"{cleaned_event_file}.parquet"
-    create_and_write_shards_from_table(table, temp_dir, num_shards, time_formats, metadata_columns, fname)
+    create_and_write_shards_from_table(table, temp_dir, num_shards, time_formats, property_columns, fname)
 
 
 def process_csv_file(
@@ -360,7 +355,7 @@ def process_csv_file(
     temp_dir: str,
     num_shards: int,
     time_formats: Iterable[str],
-    metadata_columns: List[str],
+    property_columns: List[str],
 ):
     """Convert a MEDS Flat CSV file to MEDS."""
     logging.info("Working on ", event_file)
@@ -384,7 +379,7 @@ def process_csv_file(
             cleaned_event_file = os.path.basename(event_file).split(".")[0]
             fname = f"{cleaned_event_file}_{batch_index}.parquet"
 
-            create_and_write_shards_from_table(batch, temp_dir, num_shards, time_formats, metadata_columns, fname)
+            create_and_write_shards_from_table(batch, temp_dir, num_shards, time_formats, property_columns, fname)
 
 
 def convert_flat_to_meds_polars(
@@ -435,19 +430,19 @@ def convert_flat_to_meds_polars(
 
     if num_proc != 1:
         with mp.get_context("spawn").Pool(num_proc) as pool:
-            metadata_columns_info = dict()
+            property_columns_info = dict()
             for columns_info in pool.imap_unordered(get_csv_columns, csv_tasks):
                 # TODO: Need to verify that types are consistent across files
-                metadata_columns_info.update(columns_info)
+                property_columns_info.update(columns_info)
             for columns_info in pool.imap_unordered(get_parquet_columns, parquet_tasks):
-                metadata_columns_info.update(columns_info)
+                property_columns_info.update(columns_info)
 
-            metadata_columns_set = metadata_columns_info.keys() - KNOWN_COLUMNS
+            property_columns_set = property_columns_info.keys() - KNOWN_COLUMNS
             # TODO: Ideally we'd support non-text metdata columns but for now we assert all metadata are strings
             assert all(
-                [metadata_columns_info[k] in ("string", "large_string") for k in metadata_columns_set]
+                [property_columns_info[k] in ("string", "large_string") for k in property_columns_set]
             ), "All metadata must be string type"
-            metadata_columns = sorted(list(metadata_columns_set))
+            property_columns = sorted(list(property_columns_set))
 
             csv_processor = functools.partial(
                 process_csv_file,
@@ -455,7 +450,7 @@ def convert_flat_to_meds_polars(
                 temp_dir=temp_dir,
                 num_shards=num_shards,
                 time_formats=time_formats,
-                metadata_columns=metadata_columns,
+                property_columns=property_columns,
             )
 
             parquet_processor = functools.partial(
@@ -463,7 +458,7 @@ def convert_flat_to_meds_polars(
                 temp_dir=temp_dir,
                 num_shards=num_shards,
                 time_formats=time_formats,
-                metadata_columns=metadata_columns,
+                property_columns=property_columns,
             )
 
             print("Partitioning MEDS Flat files into shards based on patient ID and writing to disk...")
@@ -474,18 +469,18 @@ def convert_flat_to_meds_polars(
                 for _ in pool.imap_unordered(parquet_processor, parquet_tasks):
                     pbar.update()
     else:
-        metadata_columns_info = dict()
+        property_columns_info = dict()
         for task in csv_tasks:
-            metadata_columns_info.update(get_csv_columns(task))
+            property_columns_info.update(get_csv_columns(task))
         for task in parquet_tasks:
-            metadata_columns_info.update(get_parquet_columns(task))
+            property_columns_info.update(get_parquet_columns(task))
 
-        metadata_columns_set = metadata_columns_info.keys() - KNOWN_COLUMNS
+        property_columns_set = property_columns_info.keys() - KNOWN_COLUMNS
         # TODO: Ideally we'd support non-text metdata columns but for now we assert all metadata are strings
         assert all(
-            [metadata_columns_info[k] in ("string", "large_string") for k in metadata_columns_set]
+            [property_columns_info[k] in ("string", "large_string") for k in property_columns_set]
         ), "All metadata must be string type"
-        metadata_columns = sorted(list(metadata_columns_set))
+        property_columns = sorted(list(property_columns_set))
 
         csv_processor = functools.partial(
             process_csv_file,
@@ -493,14 +488,14 @@ def convert_flat_to_meds_polars(
             temp_dir=temp_dir,
             num_shards=num_shards,
             time_formats=time_formats,
-            metadata_columns=metadata_columns,
+            property_columns=property_columns,
         )
         parquet_processor = functools.partial(
             process_parquet_file,
             temp_dir=temp_dir,
             num_shards=num_shards,
             time_formats=time_formats,
-            metadata_columns=metadata_columns,
+            property_columns=property_columns,
         )
 
         for task in tqdm(csv_tasks, total=len(csv_tasks)):
@@ -516,7 +511,7 @@ def convert_flat_to_meds_polars(
     os.mkdir(data_dir)
 
     print("Collating source table data, shard by shard, to create patient timelines...")
-    print("(Gathering measurements into events, events into timelines)")
+    print("(Gathering events into timelines)")
     for shard_index in tqdm(range(num_shards), total=num_shards):
         logging.info("Processing shard ", shard_index)
         shard_dir = os.path.join(temp_dir, str(shard_index))
@@ -528,27 +523,16 @@ def convert_flat_to_meds_polars(
 
         all_events = pl.concat(events)
 
-        measurement = pl.struct(
+        event = pl.struct(
+            time=pl.col("time"),
             code=pl.col("code"),
             text_value=pl.col("text_value"),
             numeric_value=pl.col("numeric_value"),
             datetime_value=pl.col("datetime_value"),
-            metadata=pl.col("metadata"),
+            properties=pl.col("properties"),
         )
 
-        grouped_by_time = all_events.group_by("patient_id", "time").agg(measurements=measurement)
-
-        event = pl.struct(
-            pl.col("time"),
-            pl.col("measurements"),
-        )
-
-        grouped_by_patient = grouped_by_time.group_by("patient_id").agg(events=event.sort_by(pl.col("time")))
-
-        # We need to add a dummy column for static_measurements
-        grouped_by_patient = grouped_by_patient.with_columns(static_measurements=pl.lit(None)).select(
-            ["patient_id", "static_measurements", "events"]
-        )
+        grouped_by_patient = all_events.group_by("patient_id").agg(events=event.sort_by(pl.col("time")))
 
         # We now have our data in the final form, grouped_by_patient, but we have to do one final transformation
         # We have to convert from polar's large_list to list because large_list is not supported by huggingface
@@ -559,12 +543,12 @@ def convert_flat_to_meds_polars(
         converted = grouped_by_patient.collect().to_arrow()
 
         # Now we need to reconstruct the schema
-        if len(metadata_columns) == 0:
-            metadata_schema = pa.null()
+        if len(property_columns) == 0:
+            property_schema = pa.null()
         else:
-            metadata_schema = pa.struct([(column, pa.string()) for column in metadata_columns])
+            property_schema = pa.struct([(column, pa.string()) for column in property_columns])
 
-        desired_schema = meds.patient_schema(metadata_schema)
+        desired_schema = meds.patient_schema(property_schema)
 
         # All the larg_lists are now converted to lists, so we are good to load with huggingface
         casted = converted.cast(desired_schema)
@@ -648,10 +632,10 @@ def convert_flat_to_meds_duckdb(
         all_columns_with_types.append(get_parquet_columns(task))
         tasks.append(task)
 
-    metadata_columns_set = {cols for table in all_columns_with_types for cols in table}
+    properties_columns_set = {cols for table in all_columns_with_types for cols in table}
 
-    metadata_columns_set = metadata_columns_set - KNOWN_COLUMNS
-    metadata_columns = sorted(list(metadata_columns_set))
+    properties_columns_set = properties_columns_set - KNOWN_COLUMNS
+    properties_columns = sorted(list(properties_columns_set))
 
     for i, (task, columns_dtypes) in enumerate(zip(tasks, all_columns_with_types)):
         select_parts = []
@@ -688,7 +672,7 @@ def convert_flat_to_meds_duckdb(
             """
             )
 
-        for column in metadata_columns:
+        for column in properties_columns_set:
             if column in columns_dtypes.keys():
                 # TODO: Support casting based on pyarrow type, currently breaks with type eg `large_string`
                 # because `large_string` is not a supported duckdb datatype. Just need to add a mapping from
@@ -720,10 +704,10 @@ def convert_flat_to_meds_duckdb(
 
     conn.sql(f"CREATE VIEW all_events as {' UNION ALL '.join(all_views)}")
 
-    if len(metadata_columns) != 0:
-        metadata_str = "{" + ", ".join(f""" '{k}': "{k}" """ for k in metadata_columns) + "}"
+    if len(properties_columns) != 0:
+        properties_str = "{" + ", ".join(f""" '{k}': "{k}" """ for k in properties_columns) + "}"
     else:
-        metadata_str = "null"
+        properties_str = "null"
 
     print(f"Using {num_shards} shards to collate patient timelines with DuckDB...")
 
@@ -739,20 +723,14 @@ def convert_flat_to_meds_duckdb(
 
         create_joined_view_for_shard_query = f"""
             CREATE VIEW shard_{shard_index}_joined AS
-            SELECT patient_id, null as static_measurements,
-                list({{'time': time, 'measurements': measurements}} ORDER BY time ASC) as events
-            FROM (
-                SELECT patient_id, time,
-                    list({{
+            SELECT patient_id,
+                list({{'time': time,
                         'code': code,
                         'text_value': text_value,
                         'numeric_value': numeric_value,
                         'datetime_value': datetime_value,
-                        'metadata': {metadata_str}}}
-                    ) as measurements
-                FROM shard_{shard_index}_events
-                GROUP BY patient_id, time
-            )
+                        'properties': {properties_str}}} ORDER BY time ASC) as events
+            FROM shard_{shard_index}_events
             GROUP BY patient_id
         """
         conn.sql(create_joined_view_for_shard_query)
