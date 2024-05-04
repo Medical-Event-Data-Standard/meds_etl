@@ -695,7 +695,7 @@ def convert_flat_to_meds_duckdb(
                 # parquet-supported datatypes to duckdb-supported datatypes and cast accordingly. Then use:
                 # select_parts.append(f'cast("{column}" as {columns_dtypes[column]}) as "{column}"')
                 assert columns_dtypes[column] in ("string", "large_string"), "All metadata must be string type"
-                select_parts.append(column)
+                select_parts.append(f'"{column}"')
             else:
                 select_parts.append(f'cast(null as string) as "{column}"')
 
