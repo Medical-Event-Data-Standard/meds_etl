@@ -274,7 +274,7 @@ def write_event_data(
         }
 
         if "visit_occurrence_id" in batch.columns:
-            metadata["visit_id"] = pl.col("visit_occurrence_id")
+            metadata["visit_id"] = pl.col("visit_occurrence_id").cast(pl.String)
 
         if "unit_source_value" in batch.columns:
             metadata["unit"] = pl.col("unit_source_value")
@@ -287,11 +287,13 @@ def write_event_data(
 
         if (table_name + "_end_datetime") in batch.columns:
             end = cast_to_datetime(batch, table_name + "_end_datetime", move_to_end_of_day=True)
-            metadata["end"] = end
+            metadata["end"] = end.cast(pl.String)
 
         if 'discharged_to_concept_id' in batch.columns:
             metadata['discharge_facility'] = (
-                pl.coalesce(pl.col('discharged_to_concept_id'), 0).replace(concept_id_map)
+                pl.coalesce(
+                    pl.col('discharged_to_concept_id'), 0
+                ).replace(concept_id_map).cast(pl.String)
             )
 
         batch = batch.filter(code.is_not_null())
@@ -317,7 +319,9 @@ def write_event_data(
         # Write this part of the MEDS Flat file to disk
         fname = os.path.join(path_to_MEDS_flat_dir, f'{table_name.replace("/", "_")}_{uuid.uuid4()}.parquet')
         try:
-            event_data.sink_parquet(fname, compression="zstd", compression_level=1, maintain_order=False)
+            event_data.collect(streaming=True).write_parquet(
+                fname, compression="zstd", compression_level=1
+            )
         except pl.exceptions.InvalidOperationError as e:
             print(table_name)
             print(e)
