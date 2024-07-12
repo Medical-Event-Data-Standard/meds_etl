@@ -112,8 +112,8 @@ def load_file(path_to_decompressed_dir: str, fname: str) -> Any:
         return open(fname)
 
 
-def cast_to_datetime(table: pl.LazyFrame, column: str, move_to_end_of_day: bool = False):
-    if table.schema[column] == pl.Utf8():
+def cast_to_datetime(schema: Any, column: str, move_to_end_of_day: bool = False):
+    if schema[column] == pl.Utf8():
         if not move_to_end_of_day:
             return meds_etl.flat.parse_time(pl.col(column), OMOP_TIME_FORMATS)
         else:
@@ -125,15 +125,15 @@ def cast_to_datetime(table: pl.LazyFrame, column: str, move_to_end_of_day: bool 
                 time.str.to_datetime("%Y-%m-%d", strict=False, time_unit="us").dt.offset_by("1d").dt.offset_by("-1s"),
             )
             return time
-    elif table.schema[column] == pl.Date():
+    elif schema[column] == pl.Date():
         time = pl.col(column).cast(pl.Datetime(time_unit="us"))
         if move_to_end_of_day:
             time = time.dt.offset_by("1d").dt.offset_by("-1s")
         return time
-    elif isinstance(table.schema[column], pl.Datetime):
+    elif isinstance(schema[column], pl.Datetime):
         return pl.col(column).cast(pl.Datetime(time_unit="us"))
     else:
-        raise RuntimeError("Unknown how to handle date type? " + table.schema[column] + " " + column)
+        raise RuntimeError("Unknown how to handle date type? " + schema[column] + " " + column)
 
 
 def write_event_data(
@@ -147,7 +147,9 @@ def write_event_data(
     """Write event data from the given table to event files in MEDS Flat format"""
     for table_details in all_table_details:
         batch = get_batch()
-        batch = batch.rename({c: c.lower() for c in batch.columns})
+
+        batch = batch.rename({c: c.lower() for c in batch.collect_schema().names()})
+        schema = batch.collect_schema()
         # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # #
         # Determine what to use for the `patient_id` column in MEDS Flat  #
         # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # #
@@ -164,7 +166,7 @@ def write_event_data(
             # Take the `birth_datetime` if its available, otherwise
             # construct it from `year_of_birth`, `month_of_birth`, `day_of_birth`
             time = pl.coalesce(
-                cast_to_datetime(batch, "birth_datetime"),
+                cast_to_datetime(schema, "birth_datetime"),
                 pl.datetime(
                     pl.col("year_of_birth"),
                     pl.coalesce(pl.col("month_of_birth"), pl.lit(1)),
@@ -178,11 +180,11 @@ def write_event_data(
             # in that order of preference
             options = ["_start_datetime", "_start_date", "_datetime", "_date"]
             options = [
-                cast_to_datetime(batch, table_name + option, move_to_end_of_day=True)
+                cast_to_datetime(schema, table_name + option, move_to_end_of_day=True)
                 for option in options
-                if table_name + option in batch.columns
+                if table_name + option in schema.names()
             ]
-            assert len(options) > 0, f"Could not find the time column {batch.columns}"
+            assert len(options) > 0, f"Could not find the time column {schema.names()}"
             time = pl.coalesce(options)
 
         # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # #
@@ -198,7 +200,7 @@ def write_event_data(
             # Try using the source concept ID, but if it's not available then use the concept ID
             concept_id_field = table_details.get("concept_id_field", table_name + "_concept_id")
             concept_id = pl.col(concept_id_field).cast(pl.Int64)
-            if concept_id_field.replace("_concept_id", "_source_concept_id") in batch.columns:
+            if concept_id_field.replace("_concept_id", "_source_concept_id") in schema.names():
                 source_concept_id = pl.col(concept_id_field.replace("_concept_id", "_source_concept_id")).cast(pl.Int64)
             else:
                 source_concept_id = pl.lit(0, dtype=pl.Int64)
@@ -216,7 +218,7 @@ def write_event_data(
 
             # Replace values in `concept_id` with the normalized concepts to which they are mapped
             # based on the `concept_id_map`
-            code = concept_id.replace(concept_id_map)
+            code = concept_id.replace_strict(concept_id_map, return_dtype=pl.Utf8())
 
         # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # #
         # Determine what to use for the `value` column in MEDS Flat   #
@@ -253,10 +255,9 @@ def write_event_data(
                     "SOURCE_CODE/"
                     + pl.col(concept_id_field.replace("_concept_id", "_source_value"))
                 )
-                .otherwise(
-                    # Should be captured by the source concept id, so just map the value to a string.
-                    concept_id_value.map_dict(concept_name_map)
-                )
+                .when(concept_id_value != 0)
+                .then("OMOP_CONCEPT_ID/" + concept_id_value.cast(pl.Utf8()))
+                .otherwise(pl.lit(None, dtype=pl.Utf8()))
             )
 
             value = pl.coalesce(value, backup_value)
@@ -273,20 +274,20 @@ def write_event_data(
             "table": pl.lit(table_name, dtype=str),
         }
 
-        if "visit_occurrence_id" in batch.columns:
+        if "visit_occurrence_id" in schema.names():
             metadata["visit_id"] = pl.col("visit_occurrence_id")
 
-        if "unit_source_value" in batch.columns:
+        if "unit_source_value" in schema.names():
             metadata["unit"] = pl.col("unit_source_value")
 
-        if "load_table_id" in batch.columns:
+        if "load_table_id" in schema.names():
             metadata["clarity_table"] = pl.col("load_table_id")
 
-        if "note_id" in batch.columns:
+        if "note_id" in schema.names():
             metadata["note_id"] = pl.col("note_id")
 
-        if (table_name + "_end_datetime") in batch.columns:
-            end = cast_to_datetime(batch, table_name + "_end_datetime", move_to_end_of_day=True)
+        if (table_name + "_end_datetime") in schema.names():
+            end = cast_to_datetime(schema, table_name + "_end_datetime", move_to_end_of_day=True)
             metadata["end"] = end
 
         batch = batch.filter(code.is_not_null())
@@ -312,7 +313,7 @@ def write_event_data(
         # Write this part of the MEDS Flat file to disk
         fname = os.path.join(path_to_MEDS_flat_dir, f'{table_name.replace("/", "_")}_{uuid.uuid4()}.parquet')
         try:
-            event_data.collect().write_parquet(fname, compression="zstd", compression_level=1, maintain_order=False)
+            event_data.sink_parquet(fname, compression="zstd", compression_level=1, maintain_order=False)
         except pl.exceptions.InvalidOperationError as e:
             print(table_name)
             print(e)
@@ -729,6 +730,7 @@ def main():
 
         print("Decompressing OMOP tables, mapping to MEDS Flat format, writing to disk...")
         if args.num_proc > 1:
+            os.environ["POLARS_MAX_THREADS"] = "1"
             with multiprocessing.get_context("spawn").Pool(args.num_proc) as pool:
                 # Wrap all tasks with tqdm for a progress bar
                 total_tasks = len(all_csv_tasks)
