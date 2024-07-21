@@ -25,7 +25,8 @@ duckdb = [
     "duckdb >= 0.10.1"
 ]
 cpp = [
-    "meds_etl_cpp == 0.2.1"
+
+    "meds_etl_cpp == 0.2.2"
 ]
 
 
