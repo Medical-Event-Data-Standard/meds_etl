@@ -13,7 +13,7 @@ import shutil
 import subprocess
 import tempfile
 import warnings
-from typing import Iterable, List, Literal, Optional, TextIO, Tuple, cast
+from typing import Iterable, List, Literal, Optional, TextIO, Tuple, cast, Mapping
 
 import psutil
 
@@ -21,6 +21,7 @@ try:
     import duckdb
 except ImportError:
     duckdb = None
+
 import meds
 import polars as pl
 import pyarrow as pa
@@ -128,7 +129,7 @@ def load_file(decompressed_dir: str, fname: str) -> TextIO:
         return open(fname)
 
 
-def get_csv_columns(event_file: str) -> dict:
+def get_csv_columns(event_file: str) -> Mapping[str, pl.DataType]:
     """
     Reads the first line of a CSV file to extract column names, assuming all columns as strings.
 
@@ -155,10 +156,10 @@ def get_csv_columns(event_file: str) -> dict:
             reader = csv.reader(f)
             columns = next(reader)
 
-    return {col: "string" for col in columns}
+    return {col: pl.Utf8() for col in columns}
 
 
-def get_parquet_columns(event_file: str) -> dict:
+def get_parquet_columns(event_file: str) -> Mapping[str, pl.DataType]:
     """
     Extracts column names and their data types from a Parquet file schema.
 
@@ -186,8 +187,8 @@ def get_parquet_columns(event_file: str) -> dict:
         Calling `get_parquet_columns('patient_data.parquet')` would return:
             {'patient_id': 'int64', 'name': 'string', 'visit_date': 'date32'}
     """
-    schema = pq.read_schema(event_file)
-    return {name: str(schema.field(name).type) for name in schema.names}
+    schema = pl.scan_parquet(event_file).schema
+    return dict(schema)
 
 
 def transform_properties(d, properties_columns):
@@ -195,9 +196,9 @@ def transform_properties(d, properties_columns):
         return pl.lit(None)
 
     cols = []
-    for column in properties_columns:
-        val = d.get(column, pl.lit(None, dtype=pl.Utf8))
-        cols.append(val.alias(column))
+    for column, dtype in properties_columns:
+        val = d.get(column, pl.lit(None, dtype=dtype))
+        cols.append(val.alias(column).cast(dtype))
 
     return pl.struct(cols)
 
@@ -251,7 +252,7 @@ def convert_generic_value_to_specific(generic_value: pl.Expr) -> Tuple[pl.Expr, 
 
 
 def create_and_write_shards_from_table(
-    table, temp_dir: str, num_shards: int, time_formats: Iterable[str], property_columns: List[str], filename: str
+    table, temp_dir: str, num_shards: int, time_formats: Iterable[str], property_columns: List[Tuple[str, pl.DataType]], filename: str
 ):
     # Convert all the column names to lower case
     table = table.rename({c: c.lower() for c in table.columns})
@@ -307,7 +308,7 @@ def create_and_write_shards_from_table(
     properties = {}
     for colname in table.columns:
         if colname not in KNOWN_COLUMNS:
-            properties[colname] = pl.col(colname).cast(pl.Utf8())
+            properties[colname] = pl.col(colname)
 
     properties = transform_properties(properties, property_columns)
 
@@ -355,7 +356,7 @@ def process_csv_file(
     temp_dir: str,
     num_shards: int,
     time_formats: Iterable[str],
-    property_columns: List[str],
+    property_columns: List[Tuple[str, pl.DataType]],
 ):
     """Convert a MEDS Flat CSV file to MEDS."""
     logging.info("Working on ", event_file)
@@ -428,21 +429,24 @@ def convert_flat_to_meds_polars(
     random.shuffle(csv_tasks)
     random.shuffle(parquet_tasks)
 
+    def update_types(type_dict, new_type_dict):
+        for k, v in new_type_dict.items():
+            if k not in type_dict:
+                type_dict[k] = v
+            else:
+                assert v == type_dict[k], f'We got different types for column {k}, {v} vs {type_dict[k]}
+                
+                '
+
     if num_proc != 1:
-        with mp.get_context("spawn").Pool(num_proc) as pool:
+        with mp.Pool(num_proc) as pool:
             property_columns_info = dict()
             for columns_info in pool.imap_unordered(get_csv_columns, csv_tasks):
-                # TODO: Need to verify that types are consistent across files
-                property_columns_info.update(columns_info)
+                update_types(property_columns_info, columns_info)
             for columns_info in pool.imap_unordered(get_parquet_columns, parquet_tasks):
-                property_columns_info.update(columns_info)
+                update_types(property_columns_info, columns_info)
 
-            property_columns_set = property_columns_info.keys() - KNOWN_COLUMNS
-            # TODO: Ideally we'd support non-text metdata columns but for now we assert all metadata are strings
-            assert all(
-                [property_columns_info[k] in ("string", "large_string") for k in property_columns_set]
-            ), "All metadata must be string type"
-            property_columns = sorted(list(property_columns_set))
+            property_columns = sorted([(k, v) for k,v in property_columns_info.items() if k not in KNOWN_COLUMNS])
 
             csv_processor = functools.partial(
                 process_csv_file,
@@ -471,16 +475,11 @@ def convert_flat_to_meds_polars(
     else:
         property_columns_info = dict()
         for task in csv_tasks:
-            property_columns_info.update(get_csv_columns(task))
+            update_types(property_columns_info, get_csv_columns(task))
         for task in parquet_tasks:
-            property_columns_info.update(get_parquet_columns(task))
+            update_types(property_columns_info, get_parquet_columns(task))
 
-        property_columns_set = property_columns_info.keys() - KNOWN_COLUMNS
-        # TODO: Ideally we'd support non-text metdata columns but for now we assert all metadata are strings
-        assert all(
-            [property_columns_info[k] in ("string", "large_string") for k in property_columns_set]
-        ), "All metadata must be string type"
-        property_columns = sorted(list(property_columns_set))
+        property_columns = sorted([(k, v) for k,v in property_columns_info.items() if k not in KNOWN_COLUMNS])
 
         csv_processor = functools.partial(
             process_csv_file,
@@ -546,7 +545,7 @@ def convert_flat_to_meds_polars(
         if len(property_columns) == 0:
             property_schema = pa.null()
         else:
-            property_schema = pa.struct([(column, pa.string()) for column in property_columns])
+            property_schema = converted.schema.field_by_name('events').type.value_type.field('properties').type
 
         desired_schema = meds.patient_schema(property_schema)
 
