@@ -5,6 +5,7 @@ import shutil
 import subprocess
 from importlib.resources import files
 from typing import Iterable
+import functools
 
 import jsonschema
 import meds
@@ -60,6 +61,12 @@ def main():
 
     os.makedirs(args.destination)
 
+    column_casters = {
+        'visit_id': lambda a: a.cast(pl.Int64),
+        'start': functools.partial(meds_etl.flat.parse_time, time_formats=MIMIC_TIME_FORMATS),
+        'end': functools.partial(meds_etl.flat.parse_time, time_formats=MIMIC_TIME_FORMATS),
+    }
+
     all_tables = {
         # Explicitly ignore icustays as it is redunant with hosp/transfers
         "icu/icustays": None,
@@ -71,7 +78,7 @@ def main():
             "time": pl.col("storetime"),
             "value": pl.col("value"),
             "metadata": {
-                "visit_id": pl.col("hadm_id"),
+                "visit_id": pl.col("hadm_id").cast(pl.Int64),
                 "caregiver_id": pl.col("caregiver_id"),
             },
         },
@@ -104,7 +111,7 @@ def main():
             "metadata": {
                 "location": pl.col("location"),
                 "location_category": pl.col("locationcategory"),
-                "visit_id": pl.col("hadm_id"),
+                "visit_id": pl.col("hadm_id").cast(pl.Int64),
                 "caregiver_id": pl.col("caregiver_id"),
                 "unit": pl.col("valueuom"),
                 "start": pl.col("starttime"),
@@ -116,7 +123,7 @@ def main():
             "time": pl.col("storetime"),
             "value": pl.col("rate"),
             "metadata": {
-                "visit_id": pl.col("hadm_id"),
+                "visit_id": pl.col("hadm_id").cast(pl.Int64),
                 "caregiver_id": pl.col("caregiver_id"),
                 "unit": pl.col("rateuom"),
                 "start": pl.col("starttime"),
@@ -398,8 +405,8 @@ def main():
                 columns["text_value"] = t
 
                 for k, v in mapping_code["metadata"].items():
-                    columns[k] = v.alias(k)
-
+                    transformation = column_casters.get(k, lambda a: a)
+                    columns[k] = transformation(v).alias(k)
                 try:
                     event_data = table_csv.select(**columns).collect()
                 except Exception as e:

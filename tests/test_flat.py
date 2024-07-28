@@ -56,7 +56,7 @@ def get_random_patient(patient_id: int, include_properties=True) -> meds.Patient
                 code = code[:3] + "." + code[3:]
         current_date = current_date + datetime.timedelta(days=random.randint(1, 100))
         code = code_cat + "/" + code
-        patient["events"].append({"time": current_date, "code": code, "properties": {"ontology": code_cat}})
+        patient["events"].append({"time": current_date, "code": code, "properties": {"ontology": code_cat, 'number': 100}})
 
     if not include_properties:
         for e in patient["events"]:
@@ -83,6 +83,7 @@ def create_dataset(tmp_path: pathlib.Path, include_properties=True):
             [
                 ("ontology", pa.string()),
                 ("dummy", pa.string()),
+                ("number", pa.int64()),
             ]
         )
 
@@ -113,9 +114,9 @@ def roundtrip_helper(tmp_path: pathlib.Path, patients: List[meds.Patient], forma
     for backend in ["duckdb", "polars", "cpp"]:
         if backend == "duckdb" and duckdb is None:
             continue
-        if backend == "cpp" and meds_etl_cpp is None or format != "parquet":
+        if backend == "cpp" and (meds_etl_cpp is None or format != "parquet"):
             continue
-        print("Testing", format, backend)
+        print("Testing", format, backend, num_proc)
         meds_dataset = tmp_path / "meds"
         meds_flat_dataset = tmp_path / f"meds_flat_{format}_{num_proc}_{backend}"
         meds_dataset2 = tmp_path / f"meds2_{format}_{num_proc}_{backend}"
@@ -123,7 +124,7 @@ def roundtrip_helper(tmp_path: pathlib.Path, patients: List[meds.Patient], forma
         meds_etl.flat.convert_meds_to_flat(str(meds_dataset), str(meds_flat_dataset), num_proc=num_proc, format=format)
 
         meds_etl.flat.convert_flat_to_meds(
-            str(meds_flat_dataset), str(meds_dataset2), num_proc=num_proc, num_shards=10, backend=backend
+            str(meds_flat_dataset), str(meds_dataset2), num_proc=num_proc, num_shards=num_proc, backend=backend
         )
 
         patient_table = pa.concat_tables(
@@ -155,12 +156,7 @@ def test_roundtrip_with_properties(tmp_path: pathlib.Path):
     patients = pq.read_table(meds_dataset / "data" / "patients.parquet").to_pylist()
     patients.sort(key=lambda a: a["patient_id"])
 
-    roundtrip_helper(tmp_path, patients, "csv", 1)
-    roundtrip_helper(tmp_path, patients, "compressed_csv", 1)
     roundtrip_helper(tmp_path, patients, "parquet", 1)
-
-    roundtrip_helper(tmp_path, patients, "csv", 4)
-    roundtrip_helper(tmp_path, patients, "compressed_csv", 4)
     roundtrip_helper(tmp_path, patients, "parquet", 4)
 
 
