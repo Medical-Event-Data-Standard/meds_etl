@@ -1,18 +1,21 @@
 import argparse
+import functools
 import json
 import os
 import shutil
 import subprocess
 from importlib.resources import files
 from typing import Iterable
-import functools
 
 import jsonschema
 import meds
 import polars as pl
+import pyarrow as pa
+import pyarrow.parquet as pq
 
 import meds_etl
-import meds_etl.flat
+import meds_etl.unsorted
+import meds_etl.utils
 
 MIMIC_VERSION = "2.2"
 
@@ -62,9 +65,9 @@ def main():
     os.makedirs(args.destination)
 
     column_casters = {
-        'visit_id': lambda a: a.cast(pl.Int64),
-        'start': functools.partial(meds_etl.flat.parse_time, time_formats=MIMIC_TIME_FORMATS),
-        'end': functools.partial(meds_etl.flat.parse_time, time_formats=MIMIC_TIME_FORMATS),
+        "visit_id": lambda a: a.cast(pl.Int64),
+        "start": functools.partial(meds_etl.utils.parse_time, time_formats=MIMIC_TIME_FORMATS),
+        "end": functools.partial(meds_etl.utils.parse_time, time_formats=MIMIC_TIME_FORMATS),
     }
 
     all_tables = {
@@ -335,7 +338,7 @@ def main():
     temp_dir = os.path.join(args.destination, "temp")
     os.mkdir(temp_dir)
 
-    os.mkdir(os.path.join(temp_dir, "flat_data"))
+    os.mkdir(os.path.join(temp_dir, "unsorted_data"))
 
     print("Processing tables into " + temp_dir)
 
@@ -361,7 +364,7 @@ def main():
             )
 
             patient_id = pl.col("subject_id").cast(pl.Int64)
-            time = meds_etl.flat.parse_time(mapping_code["time"], MIMIC_TIME_FORMATS)
+            time = meds_etl.utils.parse_time(mapping_code["time"], MIMIC_TIME_FORMATS)
 
             code = mapping_code["code"]
             if "value" in mapping_code:
@@ -369,7 +372,7 @@ def main():
             else:
                 value = pl.lit(None, dtype=str)
 
-            d, n, t = meds_etl.flat.convert_generic_value_to_specific(value)
+            n, t = meds_etl.utils.convert_generic_value_to_specific(value)
 
             if "metadata" not in mapping_code:
                 mapping_code["metadata"] = {}
@@ -400,7 +403,6 @@ def main():
                     "code": code,
                 }
 
-                columns["datetime_value"] = d
                 columns["numeric_value"] = n
                 columns["text_value"] = t
 
@@ -415,7 +417,7 @@ def main():
                     raise e
 
                 fname = os.path.join(
-                    temp_dir, "flat_data", f'{table_name.replace("/", "_")}_{map_index}_{batch_index}.parquet'
+                    temp_dir, "unsorted_data", f'{table_name.replace("/", "_")}_{map_index}_{batch_index}.parquet'
                 )
                 event_data.write_parquet(fname)
             
@@ -423,14 +425,16 @@ def main():
 
         os.remove(uncompressed_path)
 
-    shutil.rmtree(decompressed_dir)
+    # shutil.rmtree(decompressed_dir)
 
     print("Processing each shard")
 
-    with open(os.path.join(temp_dir, "metadata.json"), "w") as f:
+    os.mkdir(os.path.join(temp_dir, "metadata"))
+
+    with open(os.path.join(temp_dir, "metadata", "dataset.json"), "w") as f:
         f.write("{}\n")
 
-    meds_etl.flat.convert_flat_to_meds(
+    meds_etl.unsorted.sort(
         temp_dir,
         os.path.join(args.destination, "result"),
         num_shards=args.num_shards,
@@ -439,6 +443,7 @@ def main():
     )
 
     shutil.move(os.path.join(args.destination, "result", "data"), os.path.join(args.destination, "data"))
+    shutil.move(os.path.join(args.destination, "result", "metadata"), os.path.join(args.destination, "metadata"))
     shutil.rmtree(os.path.join(args.destination, "result"))
 
     shutil.rmtree(temp_dir)
@@ -489,7 +494,7 @@ def main():
                     assert (
                         value == code_metadata[code].get("parent_codes", [None])[0]
                     ), f"{code} {descr} {value} {code_metadata[code]}"
-                result = {}
+                result = {"code": code}
 
                 if descr is not None:
                     result["description"] = descr
@@ -499,15 +504,18 @@ def main():
 
                 code_metadata[code] = result
 
+    code_metadata_table = pa.Table.from_pylist(code_metadata.values(), meds.code_metadata_schema())
+    pq.write_table(code_metadata_table, os.path.join(args.destination, "metadata", "code.parquet"))
+
     metadata = {
         "dataset_name": "MIMIC-IV",
         "dataset_version": MIMIC_VERSION,
         "etl_name": "meds_etl.mimic",
         "etl_version": meds_etl.__version__,
-        "code_metadata": code_metadata,
+        "meds_version": "0.3",
     }
 
-    jsonschema.validate(instance=metadata, schema=meds.dataset_metadata)
+    jsonschema.validate(instance=metadata, schema=meds.dataset_metadata_schema)
 
-    with open(os.path.join(args.destination, "metadata.json"), "w") as f:
+    with open(os.path.join(args.destination, "metadata", "metadata.json"), "w") as f:
         json.dump(metadata, f)

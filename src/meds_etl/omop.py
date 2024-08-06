@@ -19,7 +19,8 @@ import polars as pl
 from tqdm import tqdm
 
 import meds_etl
-import meds_etl.flat
+import meds_etl.unsorted
+import meds_etl.utils
 
 RANDOM_SEED: int = 3422342
 # OMOP constants
@@ -115,7 +116,7 @@ def load_file(path_to_decompressed_dir: str, fname: str) -> Any:
 def cast_to_datetime(schema: Any, column: str, move_to_end_of_day: bool = False):
     if schema[column] == pl.Utf8():
         if not move_to_end_of_day:
-            return meds_etl.flat.parse_time(pl.col(column), OMOP_TIME_FORMATS)
+            return meds_etl.utils.parse_time(pl.col(column), OMOP_TIME_FORMATS)
         else:
             # Try to cast time to a datetime but if only the date is available, then use
             # that date with a timestamp of 23:59:59
@@ -298,7 +299,7 @@ def write_event_data(
             "code": code,
         }
 
-        d, n, t = meds_etl.flat.convert_generic_value_to_specific(value)
+        d, n, t = meds_etl.utils.convert_generic_value_to_specific(value)
 
         columns["datetime_value"] = d
         columns["numeric_value"] = n
@@ -761,8 +762,8 @@ def main():
     # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # #
 
     print("Converting from MEDS Flat to MEDS...")
-    meds_etl.flat.convert_flat_to_meds(
-        source_flat_path=path_to_temp_dir,
+    meds_etl.unsorted.sort(
+        source_unsorted_path=path_to_temp_dir,
         target_meds_path=os.path.join(args.path_to_dest_meds_dir, "result"),
         num_shards=args.num_shards,
         num_proc=args.num_proc,
