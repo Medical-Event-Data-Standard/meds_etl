@@ -16,6 +16,8 @@ from typing import Any, Dict, Iterable, List, Mapping, Tuple
 import jsonschema
 import meds
 import polars as pl
+import pyarrow as pa
+import pyarrow.parquet as pq
 from tqdm import tqdm
 
 import meds_etl
@@ -299,9 +301,8 @@ def write_event_data(
             "code": code,
         }
 
-        d, n, t = meds_etl.utils.convert_generic_value_to_specific(value)
+        n, t = meds_etl.utils.convert_generic_value_to_specific(value)
 
-        columns["datetime_value"] = d
         columns["numeric_value"] = n
         columns["text_value"] = t
 
@@ -476,6 +477,7 @@ def extract_metadata(path_to_src_omop_dir: str, path_to_decompressed_dir: str, v
             )
             for i in range(len(custom_concepts["code"])):
                 code_metadata[custom_concepts["code"][i]] = {
+                    "code": custom_concepts["code"][i],
                     "description": custom_concepts["description"][i],
                     "parent_codes": [],
                 }
@@ -523,7 +525,7 @@ def extract_metadata(path_to_src_omop_dir: str, path_to_decompressed_dir: str, v
         "dataset_version": "|".join(str(a) for a in dataset_versions),  # eg '2024-02-01|2024-02-01'
         "etl_name": "meds_etl.omop",
         "etl_version": meds_etl.__version__,
-        "code_metadata": code_metadata,  # `code_metadata` could have >100k keys
+        "meds_version": meds.__version__,
     }
     # At this point metadata['code_metadata']['STANFORD_MEAS/AMOXICILLIN/CLAVULANATE']
     # should give a dictionary like
@@ -531,9 +533,9 @@ def extract_metadata(path_to_src_omop_dir: str, path_to_decompressed_dir: str, v
     # where LOINC Code '18862-3' is a standard concept representing a lab test
     # measurement determining microorganism susceptibility to Amoxicillin+clavulanic acid
 
-    jsonschema.validate(instance=metadata, schema=meds.dataset_metadata)
+    jsonschema.validate(instance=metadata, schema=meds.dataset_metadata_schema)
 
-    return metadata, concept_id_map, concept_name_map
+    return metadata, code_metadata, concept_id_map, concept_name_map
 
 
 def main():
@@ -586,7 +588,7 @@ def main():
 
     # Create temporary folder for storing MEDS Flat data within target directory
     path_to_temp_dir = os.path.join(args.path_to_dest_meds_dir, "temp")
-    path_to_MEDS_flat_dir = os.path.join(path_to_temp_dir, "flat_data")
+    path_to_MEDS_flat_dir = os.path.join(path_to_temp_dir, "unsorted_data")
 
     if not args.continue_job or not (os.path.exists(path_to_MEDS_flat_dir) and os.path.exists(path_to_temp_dir)):
         if os.path.exists(path_to_temp_dir):
@@ -611,19 +613,25 @@ def main():
         # Generate metadata.json from OMOP concept table  #
         # # # # # # # # # # # # # # # # # # # # # # # # # #
 
-        metadata, concept_id_map, concept_name_map = extract_metadata(
+        metadata, code_metadata, concept_id_map, concept_name_map = extract_metadata(
             path_to_src_omop_dir=args.path_to_src_omop_dir,
             path_to_decompressed_dir=path_to_decompressed_dir,
             verbose=args.verbose,
         )
 
+        os.mkdir(os.path.join(path_to_temp_dir, "metadata"))
+
         # Save the extracted metadata file to disk...
         # We save one copy in the MEDS Flat data directory
-        with open(os.path.join(path_to_temp_dir, "metadata.json"), "w") as f:
+        with open(os.path.join(path_to_temp_dir, "metadata", "dataset.json"), "w") as f:
             json.dump(metadata, f)
+
+        table = pa.Table.from_pylist(code_metadata.values(), meds.code_metadata_schema())
+        pq.write_table(table, os.path.join(path_to_temp_dir, "metadata", "code.parquet"))
         # And we save another copy in the final/target MEDS directory
-        with open(os.path.join(args.path_to_dest_meds_dir, "metadata.json"), "w") as f:
-            json.dump(metadata, f)
+        shutil.copytree(
+            os.path.join(path_to_temp_dir, "metadata"), os.path.join(args.path_to_dest_meds_dir, "metadata")
+        )
 
         # # # # # # # # # # # # # # # # # # # # # # # # # # # # # #
         # Convert all "measurements" to MEDS Flat, write to disk  #

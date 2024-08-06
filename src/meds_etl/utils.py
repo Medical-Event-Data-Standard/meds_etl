@@ -9,7 +9,7 @@ def parse_time(time: pl.Expr, time_formats: Iterable[str]) -> pl.Expr:
     )
 
 
-def convert_generic_value_to_specific(generic_value: pl.Expr) -> Tuple[pl.Expr, pl.Expr, pl.Expr]:
+def convert_generic_value_to_specific(generic_value: pl.Expr) -> Tuple[pl.Expr, pl.Expr]:
     generic_value = generic_value.str.strip_chars()
 
     numeric_value = generic_value.cast(pl.Float32, strict=False)

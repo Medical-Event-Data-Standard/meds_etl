@@ -1,31 +1,17 @@
 from __future__ import annotations
 
 import argparse
-import csv
 import functools
 import glob
-import gzip
 import logging
 import multiprocessing
 import os
-import pathlib
 import random
 import shutil
-import subprocess
-import tempfile
-import warnings
-from typing import Iterable, List, Literal, Mapping, Optional, TextIO, Tuple, cast
-
-import psutil
-
-try:
-    import duckdb
-except ImportError:
-    duckdb = None
+from typing import Dict, List, Mapping, Tuple
 
 import meds
 import polars as pl
-import pyarrow as pa
 import pyarrow.parquet as pq
 from tqdm import tqdm
 
@@ -70,9 +56,6 @@ def get_columns(event_file: str) -> Mapping[str, pl.DataType]:
 
 
 def get_property_columns(table, properties_columns):
-    if len(properties_columns) == 0:
-        return pl.lit(None)
-
     cols = []
     for column, dtype in properties_columns:
         if column in table.collect_schema():
@@ -124,6 +107,8 @@ def create_and_write_shards_from_table(
 
     numeric_value = pl.col("numeric_value").cast(pl.Utf8())
 
+    print(table.schema)
+
     columns = (
         [
             ("patient_id", patient_id),
@@ -148,7 +133,7 @@ def create_and_write_shards_from_table(
         shard.write_parquet(fname, compression="uncompressed")
 
 
-def process_file(event_file: str, *, temp_dir: str, num_shards: int, property_columns: List[str]):
+def process_file(event_file: str, *, temp_dir: str, num_shards: int, property_columns: List[Tuple[str, pl.DataType]]):
     """Partition MEDS Flat files into shards based on patient ID and write to disk"""
     logging.info("Working on ", event_file)
 
@@ -197,9 +182,9 @@ def sort_polars(
             else:
                 assert v == type_dict[k], f"We got different types for column {k}, {v} vs {type_dict[k]}"
 
+    property_columns_info: Dict[str, pl.DataType] = dict()
     if num_proc != 1:
         with mp.Pool(num_proc) as pool:
-            property_columns_info = dict()
             for columns_info in pool.imap_unordered(get_columns, tasks):
                 update_types(property_columns_info, columns_info)
 
@@ -217,7 +202,6 @@ def sort_polars(
                 for _ in pool.imap_unordered(processor, tasks):
                     pbar.update()
     else:
-        property_columns_info = dict()
         for task in tasks:
             update_types(property_columns_info, get_columns(task))
 
@@ -279,7 +263,7 @@ def sort_polars(
 
 
 def sort(
-    source_flat_path: str,
+    source_unsorted_path: str,
     target_meds_path: str,
     num_shards: int = 100,
     num_proc: int = 1,
@@ -300,21 +284,23 @@ def sort(
     Returns:
         None
     """
-    if not os.path.exists(source_flat_path):
-        raise ValueError(f'The source MEDS Flat folder ("{source_flat_path}") does not seem to exist?')
+    if not os.path.exists(source_unsorted_path):
+        raise ValueError(f'The source MEDS Flat folder ("{source_unsorted_path}") does not seem to exist?')
 
-    if not os.path.exists(os.path.join(source_flat_path, "metadata", "dataset.json")):
-        raise ValueError(f'The source MEDS Flat folder ("{source_flat_path}") does not have a dataset metadata file?')
+    if not os.path.exists(os.path.join(source_unsorted_path, "metadata", "dataset.json")):
+        raise ValueError(
+            f'The source MEDS Flat folder ("{source_unsorted_path}") does not have a dataset metadata file?'
+        )
 
-    if not os.path.exists(os.path.join(source_flat_path, "unsorted_data")):
-        raise ValueError(f'The source MEDS Flat folder ("{source_flat_path}") does not have a unsorted_data folder')
+    if not os.path.exists(os.path.join(source_unsorted_path, "unsorted_data")):
+        raise ValueError(f'The source MEDS Flat folder ("{source_unsorted_path}") does not have a unsorted_data folder')
 
     if backend == "cpp":
         import meds_etl_cpp
 
-        meds_etl_cpp.perform_etl(source_flat_path, target_meds_path, num_shards)
+        meds_etl_cpp.perform_etl(source_unsorted_path, target_meds_path, num_shards)
     else:
-        sort_polars(source_flat_path, target_meds_path, num_shards, num_proc)
+        sort_polars(source_unsorted_path, target_meds_path, num_shards, num_proc)
 
 
 def sort_main():

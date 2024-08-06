@@ -7,13 +7,12 @@ import os
 import pathlib
 import random
 import shutil
-from typing import List
+from typing import List, Set
 
 import jsonschema
 import meds
 import pyarrow as pa
 import pyarrow.parquet as pq
-import pytest
 
 import meds_etl.unsorted
 
@@ -55,7 +54,7 @@ def get_random_patient(patient_id: int, include_properties=True) -> List[dict]:
         )
 
     if not include_properties:
-        for e in patient["events"]:
+        for e in patient:
             if "ontology" in e:
                 del e["ontology"]
             if "number" in e:
@@ -114,36 +113,25 @@ def roundtrip_helper(tmp_path: pathlib.Path, patients: List[meds.Patient], num_p
             continue
         print("Testing", format, backend, num_proc)
         meds_dataset = tmp_path / "meds"
-        meds_flat_dataset = tmp_path / f"meds_flat_{format}_{num_proc}_{backend}"
+        meds_unsorted_dataset = tmp_path / f"meds_unsorted_{format}_{num_proc}_{backend}"
         meds_dataset2 = tmp_path / f"meds2_{format}_{num_proc}_{backend}"
 
-        meds_etl.flat.convert_meds_to_flat(str(meds_dataset), str(meds_flat_dataset), num_proc=num_proc, format=format)
+        meds_unsorted_dataset.mkdir()
 
-        meds_etl.flat.convert_flat_to_meds(
-            str(meds_flat_dataset), str(meds_dataset2), num_proc=num_proc, num_shards=num_proc, backend=backend
+        shutil.copytree(meds_dataset / "data", meds_unsorted_dataset / "unsorted_data")
+        shutil.copytree(meds_dataset / "metadata", meds_unsorted_dataset / "metadata")
+
+        meds_etl.unsorted.sort(
+            str(meds_unsorted_dataset), str(meds_dataset2), num_proc=num_proc, num_shards=num_proc, backend=backend
         )
 
         patient_table = pa.concat_tables(
             [pq.read_table(meds_dataset2 / "data" / i) for i in os.listdir(meds_dataset2 / "data")]
         )
-
         final_patients = patient_table.to_pylist()
-        final_patients.sort(key=lambda a: a["patient_id"])
+        final_patients.sort(key=lambda a: (a["patient_id"], a["time"], a["code"]))
 
-        for patient in final_patients:
-            patient["events"].sort(key=lambda m: m["code"])
-
-        for patient in patients:
-            patient["events"].sort(key=lambda m: m["code"])
-
-        print(patients[1])
-
-        print(final_patients[1])
-
-        for i in range(len(patients)):
-            assert patients[i] == final_patients[i]
-
-        assert patients == final_patients
+        assert final_patients == patients
 
 
 def test_roundtrip_with_properties(tmp_path: pathlib.Path):
@@ -152,8 +140,8 @@ def test_roundtrip_with_properties(tmp_path: pathlib.Path):
     patients = pq.read_table(meds_dataset / "data" / "patients.parquet").to_pylist()
     patients.sort(key=lambda a: a["patient_id"])
 
-    roundtrip_helper(tmp_path, patients, "parquet", 1)
-    roundtrip_helper(tmp_path, patients, "parquet", 4)
+    roundtrip_helper(tmp_path, patients, 1)
+    roundtrip_helper(tmp_path, patients, 4)
 
 
 def test_roundtrip_no_properties(tmp_path: pathlib.Path):
@@ -162,13 +150,8 @@ def test_roundtrip_no_properties(tmp_path: pathlib.Path):
     patients = pq.read_table(meds_dataset / "data" / "patients.parquet").to_pylist()
     patients.sort(key=lambda a: a["patient_id"])
 
-    roundtrip_helper(tmp_path, patients, "csv", 1)
-    roundtrip_helper(tmp_path, patients, "compressed_csv", 1)
-    roundtrip_helper(tmp_path, patients, "parquet", 1)
-
-    roundtrip_helper(tmp_path, patients, "csv", 4)
-    roundtrip_helper(tmp_path, patients, "compressed_csv", 4)
-    roundtrip_helper(tmp_path, patients, "parquet", 4)
+    roundtrip_helper(tmp_path, patients, 1)
+    roundtrip_helper(tmp_path, patients, 4)
 
 
 def test_shuffle_polars(tmp_path: pathlib.Path):
@@ -197,7 +180,7 @@ def test_shuffle_polars(tmp_path: pathlib.Path):
 
     meds_etl.unsorted.sort(str(meds_flat_dataset), str(meds_dataset2), num_shards=10, backend="polars")
 
-    seen_patient_ids = set()
+    seen_patient_ids: Set[int] = set()
 
     for result in glob.glob(str(meds_dataset2 / "data" / "*")):
         print(result)

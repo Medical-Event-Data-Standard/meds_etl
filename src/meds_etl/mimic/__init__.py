@@ -423,9 +423,11 @@ def main():
             
             del reader
 
+            del reader
+
         os.remove(uncompressed_path)
 
-    # shutil.rmtree(decompressed_dir)
+    shutil.rmtree(decompressed_dir)
 
     print("Processing each shard")
 
@@ -512,7 +514,7 @@ def main():
         "dataset_version": MIMIC_VERSION,
         "etl_name": "meds_etl.mimic",
         "etl_version": meds_etl.__version__,
-        "meds_version": "0.3",
+        "meds_version": meds.__version__,
     }
 
     jsonschema.validate(instance=metadata, schema=meds.dataset_metadata_schema)
