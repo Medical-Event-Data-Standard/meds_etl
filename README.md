@@ -6,7 +6,7 @@ This package library currently supports:
 
 - MIMIC-IV
 - OMOP v5
-- MEDS FLAT, a flat version of MEDS
+- MEDS Unsorted, an unsorted version of MEDS
 
 ## Setup
 Create an environment of your choice:
