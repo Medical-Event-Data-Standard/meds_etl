@@ -420,7 +420,7 @@ def main():
                     temp_dir, "unsorted_data", f'{table_name.replace("/", "_")}_{map_index}_{batch_index}.parquet'
                 )
                 event_data.write_parquet(fname)
-            
+
             del reader
 
         os.remove(uncompressed_path)

@@ -48,7 +48,7 @@ def get_random_patient(patient_id: int, include_properties=True) -> List[dict]:
             if len(code) > 3:
                 code = code[:3] + "." + code[3:]
         if patient_id == 0 and i == 0:
-            code_cat = 'Random'
+            code_cat = "Random"
         current_date = current_date + datetime.timedelta(days=random.randint(1, 100))
         code = code_cat + "/" + code
         patient.append(
@@ -236,11 +236,13 @@ def test_shuffle_cpp(tmp_path: pathlib.Path):
 
     for result in glob.glob(str(meds_dataset2 / "data" / "*")):
         print(result)
-        data = pq.read_table(result).sort_by([
-            ('patient_id', 'ascending'),
-             ('time', 'ascending'),
-             ('code', 'ascending'),
-        ])
+        data = pq.read_table(result).sort_by(
+            [
+                ("patient_id", "ascending"),
+                ("time", "ascending"),
+                ("code", "ascending"),
+            ]
+        )
 
         patient_ids = set(data["patient_id"])
 
@@ -258,7 +260,7 @@ def test_shuffle_cpp(tmp_path: pathlib.Path):
         print(comparison)
         print(data)
 
-        print('----')
+        print("----")
 
         assert comparison.shape == data.shape
         assert comparison.schema == data.schema
