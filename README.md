@@ -9,10 +9,6 @@ This package library currently supports:
 - MEDS Unsorted, an unsorted version of MEDS
 
 ## Setup
-Create an environment of your choice:
-```bash
-conda create -n meds_etl
-```
 Install the package
 ```bash
 pip install meds_etl
