@@ -107,8 +107,6 @@ def create_and_write_shards_from_table(
 
     numeric_value = pl.col("numeric_value").cast(pl.Utf8())
 
-    print(table.schema)
-
     columns = (
         [
             ("patient_id", patient_id),
@@ -298,7 +296,7 @@ def sort(
     if backend == "cpp":
         import meds_etl_cpp
 
-        meds_etl_cpp.perform_etl(source_unsorted_path, target_meds_path, num_shards)
+        meds_etl_cpp.perform_etl(source_unsorted_path, target_meds_path, num_shards, num_proc)
     else:
         sort_polars(source_unsorted_path, target_meds_path, num_shards, num_proc)
 
@@ -309,7 +307,6 @@ def sort_main():
     parser.add_argument("target_meds_path", type=str)
     parser.add_argument("--num_shards", type=int, default=100)
     parser.add_argument("--num_proc", type=int, default=1)
-    parser.add_argument("--memory_limit_GB", type=int, default=16)
     parser.add_argument("--backend", type=str, default="polars")
     args = parser.parse_args()
     sort(**vars(args))

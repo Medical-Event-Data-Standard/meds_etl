@@ -30,7 +30,7 @@ cpp = [
 [project.scripts]
 meds_etl_mimic = "meds_etl.mimic:main"
 meds_etl_omop = "meds_etl.omop:main"
-meds_etl_sort = "meds_etl.sort:sort"
+meds_etl_sort = "meds_etl.unsorted:sort_main"
 
 [tool.setuptools_scm]
 version_file = "src/meds_etl/_version.py"

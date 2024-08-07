@@ -423,8 +423,6 @@ def main():
             
             del reader
 
-            del reader
-
         os.remove(uncompressed_path)
 
     shutil.rmtree(decompressed_dir)

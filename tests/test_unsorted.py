@@ -39,7 +39,7 @@ def get_random_patient(patient_id: int, include_properties=True) -> List[dict]:
     ]
 
     code_cats = ["ICD9CM", "RxNorm"]
-    for _ in range(random.randint(1, 3 + (3 if gender == "Gender/F" else 0))):
+    for i in range(random.randint(1, 3 + (3 if gender == "Gender/F" else 0))):
         code_cat = random.choice(code_cats)
         if code_cat == "RxNorm":
             code = str(random.randint(0, 10000))
@@ -47,6 +47,8 @@ def get_random_patient(patient_id: int, include_properties=True) -> List[dict]:
             code = str(random.randint(0, 10000))
             if len(code) > 3:
                 code = code[:3] + "." + code[3:]
+        if patient_id == 0 and i == 0:
+            code_cat = 'Random'
         current_date = current_date + datetime.timedelta(days=random.randint(1, 100))
         code = code_cat + "/" + code
         patient.append(
@@ -109,12 +111,12 @@ def create_dataset(tmp_path: pathlib.Path, include_properties=True):
 
 def roundtrip_helper(tmp_path: pathlib.Path, patients: List[meds.Patient], num_proc: int):
     for backend in ["polars", "cpp"]:
-        if backend == "cpp" and (meds_etl_cpp is None or format != "parquet"):
+        if (backend == "cpp") and (meds_etl_cpp is None):
             continue
-        print("Testing", format, backend, num_proc)
+        print("Testing", backend, num_proc)
         meds_dataset = tmp_path / "meds"
-        meds_unsorted_dataset = tmp_path / f"meds_unsorted_{format}_{num_proc}_{backend}"
-        meds_dataset2 = tmp_path / f"meds2_{format}_{num_proc}_{backend}"
+        meds_unsorted_dataset = tmp_path / f"meds_unsorted_{num_proc}_{backend}"
+        meds_dataset2 = tmp_path / f"meds2_{num_proc}_{backend}"
 
         meds_unsorted_dataset.mkdir()
 
@@ -124,6 +126,8 @@ def roundtrip_helper(tmp_path: pathlib.Path, patients: List[meds.Patient], num_p
         meds_etl.unsorted.sort(
             str(meds_unsorted_dataset), str(meds_dataset2), num_proc=num_proc, num_shards=num_proc, backend=backend
         )
+
+        print(meds_dataset2)
 
         patient_table = pa.concat_tables(
             [pq.read_table(meds_dataset2 / "data" / i) for i in os.listdir(meds_dataset2 / "data")]
@@ -200,3 +204,63 @@ def test_shuffle_polars(tmp_path: pathlib.Path):
         assert comparison.schema == data.schema
 
         assert comparison == data
+
+
+def test_shuffle_cpp(tmp_path: pathlib.Path):
+    meds_dataset = tmp_path / "meds"
+    create_dataset(meds_dataset)
+
+    patients = pq.read_table(meds_dataset / "data" / "patients.parquet")
+
+    meds_flat_dataset = tmp_path / "meds_unsorted"
+    meds_flat_dataset.mkdir()
+    shutil.copytree(meds_dataset / "metadata", meds_flat_dataset / "metadata")
+    (meds_flat_dataset / "unsorted_data").mkdir()
+
+    indices = list(range(len(patients)))
+    random.shuffle(indices)
+
+    num_parts = 3
+    rows_per_part = (len(indices) + num_parts - 1) // num_parts
+
+    for a in range(num_parts):
+        i = indices[a * rows_per_part : (a + 1) * rows_per_part]
+        shuffled_patients = patients.take(i)
+        pq.write_table(shuffled_patients, meds_flat_dataset / "unsorted_data" / (str(a) + ".parquet"))
+
+    meds_dataset2 = tmp_path / "meds2"
+
+    meds_etl.unsorted.sort(str(meds_flat_dataset), str(meds_dataset2), num_shards=10, backend="cpp")
+
+    seen_patient_ids: Set[int] = set()
+
+    for result in glob.glob(str(meds_dataset2 / "data" / "*")):
+        print(result)
+        data = pq.read_table(result).sort_by([
+            ('patient_id', 'ascending'),
+             ('time', 'ascending'),
+             ('code', 'ascending'),
+        ])
+
+        patient_ids = set(data["patient_id"])
+
+        assert len(seen_patient_ids & patient_ids) == 0
+
+        seen_patient_ids |= patient_ids
+
+        mask = pa.compute.is_in(patients["patient_id"], pa.array(patient_ids))
+
+        comparison = patients.filter(mask)
+
+        print(data.schema)
+        print(comparison.schema)
+
+        print(comparison)
+        print(data)
+
+        print('----')
+
+        assert comparison.shape == data.shape
+        assert comparison.schema == data.schema
+
+        assert data == comparison
