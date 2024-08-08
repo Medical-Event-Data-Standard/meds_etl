@@ -769,7 +769,7 @@ def main():
     # Collate measurements into timelines for each patient, by shard
     # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # #
 
-    print("Converting from MEDS Flat to MEDS...")
+    print("Converting from MEDS Unsorted to MEDS...")
     meds_etl.unsorted.sort(
         source_unsorted_path=path_to_temp_dir,
         target_meds_path=os.path.join(args.path_to_dest_meds_dir, "result"),
@@ -777,7 +777,7 @@ def main():
         num_proc=args.num_proc,
         backend=args.backend,
     )
-    print("...finished converting MEDS Flat to MEDS")
+    print("...finished converting MEDS Unsorted to MEDS")
     shutil.move(
         src=os.path.join(args.path_to_dest_meds_dir, "result", "data"),
         dst=os.path.join(args.path_to_dest_meds_dir, "data"),
