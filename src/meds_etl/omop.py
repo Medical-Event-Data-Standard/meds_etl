@@ -627,7 +627,7 @@ def main():
             json.dump(metadata, f)
 
         table = pa.Table.from_pylist(code_metadata.values(), meds.code_metadata_schema())
-        pq.write_table(table, os.path.join(path_to_temp_dir, "metadata", "code.parquet"))
+        pq.write_table(table, os.path.join(path_to_temp_dir, "metadata", "codes.parquet"))
         # And we save another copy in the final/target MEDS directory
         shutil.copytree(
             os.path.join(path_to_temp_dir, "metadata"), os.path.join(args.path_to_dest_meds_dir, "metadata")

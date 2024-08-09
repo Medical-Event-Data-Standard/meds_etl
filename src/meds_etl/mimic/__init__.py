@@ -505,7 +505,7 @@ def main():
                 code_metadata[code] = result
 
     code_metadata_table = pa.Table.from_pylist(code_metadata.values(), meds.code_metadata_schema())
-    pq.write_table(code_metadata_table, os.path.join(args.destination, "metadata", "code.parquet"))
+    pq.write_table(code_metadata_table, os.path.join(args.destination, "metadata", "codes.parquet"))
 
     metadata = {
         "dataset_name": "MIMIC-IV",
