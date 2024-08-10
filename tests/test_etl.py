@@ -2,8 +2,8 @@ import os
 import shutil
 import subprocess
 
+import polars as pl
 import pytest
-from datasets import Dataset
 
 
 def test_hello_world():
@@ -64,28 +64,14 @@ class TestMimicETL:
 
     def test_load_dataset(self):
         """
-        Check that the ETL output can be loaded as a 🤗 dataset
+        Check that the ETL output can be loaded
         """
-        path = os.path.join(self.destination_path, "data")
-        self.__class__.dataset = Dataset.from_parquet(os.path.join(path, "*"))
+        path = os.path.join(self.destination_path, "data", "**", "*.parquet")
+        self.__class__.dataset = pl.read_parquet(path)
         assert self.dataset is not None, "Failed to load the dataset."
 
     def test_number_of_patients(self):
         """
         The demo contains 100 patients.
         """
-        assert len(self.dataset) == 100
-
-    def test_expected_features_exist(self):
-        """
-        The dataset should contain two columns: "patient_id" and "events".
-        """
-        expected_columns = ["patient_id", "events"]
-        assert all(column in self.dataset.features for column in expected_columns)
-
-    def test_expected_data_types(self):
-        """
-        Check that patient_id is an integer and events is a list.
-        """
-        assert self.dataset.features["patient_id"].dtype == "int64"
-        assert isinstance(self.dataset[0]["events"], list)
+        assert self.dataset.n_unique("patient_id") == 100
