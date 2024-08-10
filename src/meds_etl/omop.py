@@ -140,29 +140,29 @@ def cast_to_datetime(schema: Any, column: str, move_to_end_of_day: bool = False)
 
 
 def write_event_data(
-    path_to_MEDS_flat_dir: str,
+    path_to_MEDS_unsorted_dir: str,
     get_batch: Any,
     table_name: str,
     all_table_details: Iterable[Mapping[str, Any]],
     concept_id_map: Mapping[int, str],
     concept_name_map: Mapping[int, str],
 ) -> pl.LazyFrame:
-    """Write event data from the given table to event files in MEDS Flat format"""
+    """Write event data from the given table to event files in MEDS Unsorted format"""
     for table_details in all_table_details:
         batch = get_batch()
 
         batch = batch.rename({c: c.lower() for c in batch.collect_schema().names()})
         schema = batch.collect_schema()
-        # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # #
-        # Determine what to use for the `patient_id` column in MEDS Flat  #
-        # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # #
+        # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # #
+        # Determine what to use for the `patient_id` column in MEDS Unsorted  #
+        # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # #
 
-        # Define the MEDS Flat `patient_id` (left) to be the `person_id` columns in OMOP (right)
+        # Define the MEDS Unsorted `patient_id` (left) to be the `person_id` columns in OMOP (right)
         patient_id = pl.col("person_id").cast(pl.Int64)
 
-        # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # #
-        # Determine what to use for the `time` column in MEDS Flat  #
-        # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # #
+        # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # #
+        # Determine what to use for the `time`                          #
+        # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # #
 
         # Use special processing for the `PERSON` OMOP table
         if table_name == "person":
@@ -190,9 +190,9 @@ def write_event_data(
             assert len(options) > 0, f"Could not find the time column {schema.names()}"
             time = pl.coalesce(options)
 
-        # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # #
-        # Determine what to use for the `code` column in MEDS Flat  #
-        # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # #
+        # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # #
+        # Determine what to use for the `code` column                   #
+        # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # #
 
         if table_details.get("force_concept_code"):
             # Rather than getting the concept ID from the source table, we use the concept ID
@@ -224,7 +224,7 @@ def write_event_data(
             code = concept_id.replace_strict(concept_id_map, return_dtype=pl.Utf8())
 
         # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # #
-        # Determine what to use for the `value` column in MEDS Flat   #
+        # Determine what to use for the `value`                       #
         # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # #
 
         # By default, if the user doesn't specify in `table_details`
@@ -266,11 +266,11 @@ def write_event_data(
             value = pl.coalesce(value, backup_value)
 
         # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # #
-        # Determine the metadata columns to be stored in MEDS Flat  #
+        # Determine the metadata columns                            #
         # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # #
 
         # Every key in the `metadata` dictionary will become a distinct
-        # column in the MEDS Flat file; for each event, the metadata column
+        # column in the MEDS file; for each event, the metadata column
         # and its corresponding value for a given patient will be stored
         # as event metadata in the MEDS representation
         metadata = {
@@ -306,14 +306,13 @@ def write_event_data(
         columns["numeric_value"] = n
         columns["text_value"] = t
 
-        # Add metadata columns to the set of MEDS flat dataframe columns
+        # Add metadata columns to the set of MEDS dataframe columns
         for k, v in metadata.items():
             columns[k] = v.alias(k)
 
-        # We don't worry about partitioning here; let `flat_to_meds` handle that
         event_data = batch.select(**columns)
-        # Write this part of the MEDS Flat file to disk
-        fname = os.path.join(path_to_MEDS_flat_dir, f'{table_name.replace("/", "_")}_{uuid.uuid4()}.parquet')
+        # Write this part of the MEDS Unsorted file to disk
+        fname = os.path.join(path_to_MEDS_unsorted_dir, f'{table_name.replace("/", "_")}_{uuid.uuid4()}.parquet')
         try:
             event_data.sink_parquet(fname, compression="zstd", compression_level=1, maintain_order=False)
         except pl.exceptions.InvalidOperationError as e:
@@ -330,7 +329,7 @@ def process_table_csv(args):
         all_table_details,
         concept_id_map_data,
         concept_name_map_data,
-        path_to_MEDS_flat_dir,
+        path_to_MEDS_unsorted_dir,
         path_to_decompressed_dir,
         verbose,
     ) = args
@@ -380,7 +379,7 @@ def process_table_csv(args):
             batch = batch.lazy()
 
             write_event_data(
-                path_to_MEDS_flat_dir,
+                path_to_MEDS_unsorted_dir,
                 lambda: batch.lazy(),
                 table_name,
                 all_table_details,
@@ -396,7 +395,7 @@ def process_table_parquet(args):
         all_table_details,
         concept_id_map_data,
         concept_name_map_data,
-        path_to_MEDS_flat_dir,
+        path_to_MEDS_unsorted_dir,
         verbose,
     ) = args
     """
@@ -425,7 +424,7 @@ def process_table_parquet(args):
 
     # Load the source table, decompress if needed
     write_event_data(
-        path_to_MEDS_flat_dir,
+        path_to_MEDS_unsorted_dir,
         lambda: pl.scan_parquet(table_files),
         table_name,
         all_table_details,
@@ -553,7 +552,7 @@ def main():
         "--num_shards",
         type=int,
         default=100,
-        help="Number of shards to use for converting MEDS from the flat format "
+        help="Number of shards to use for converting MEDS from the unsorted format "
         "to MEDS (patients are distributed approximately uniformly at "
         "random across shards and collation/joining of OMOP tables is "
         "performed on a shard-by-shard basis).",
@@ -571,7 +570,7 @@ def main():
         dest="continue_job",
         action="store_true",
         help="If set, the job continues from a previous run, starting after the "
-        "conversion to MEDS Flat but before converting from MEDS Flat to MEDS.",
+        "conversion to MEDS Unsorted but before converting from MEDS Unsorted to MEDS.",
     )
 
     args = parser.parse_args()
@@ -586,22 +585,22 @@ def main():
     # that need to be decompressed as part of the ETL (via eg `load_file`)
     path_to_decompressed_dir = os.path.join(args.path_to_dest_meds_dir, "decompressed")
 
-    # Create temporary folder for storing MEDS Flat data within target directory
+    # Create temporary folder for storing MEDS Unsorted data within target directory
     path_to_temp_dir = os.path.join(args.path_to_dest_meds_dir, "temp")
-    path_to_MEDS_flat_dir = os.path.join(path_to_temp_dir, "unsorted_data")
+    path_to_MEDS_unsorted_dir = os.path.join(path_to_temp_dir, "unsorted_data")
 
-    if not args.continue_job or not (os.path.exists(path_to_MEDS_flat_dir) and os.path.exists(path_to_temp_dir)):
+    if not args.continue_job or not (os.path.exists(path_to_MEDS_unsorted_dir) and os.path.exists(path_to_temp_dir)):
         if os.path.exists(path_to_temp_dir):
             if args.verbose:
                 print(f"Deleting and recreating {path_to_temp_dir}")
             shutil.rmtree(path_to_temp_dir)
         os.mkdir(path_to_temp_dir)
 
-        if os.path.exists(path_to_MEDS_flat_dir):
+        if os.path.exists(path_to_MEDS_unsorted_dir):
             if args.verbose:
-                print(f"Deleting and recreating {path_to_MEDS_flat_dir}")
-            shutil.rmtree(path_to_MEDS_flat_dir)
-        os.mkdir(path_to_MEDS_flat_dir)
+                print(f"Deleting and recreating {path_to_MEDS_unsorted_dir}")
+            shutil.rmtree(path_to_MEDS_unsorted_dir)
+        os.mkdir(path_to_MEDS_unsorted_dir)
 
         if os.path.exists(path_to_decompressed_dir):
             if args.verbose:
@@ -622,7 +621,7 @@ def main():
         os.mkdir(os.path.join(path_to_temp_dir, "metadata"))
 
         # Save the extracted metadata file to disk...
-        # We save one copy in the MEDS Flat data directory
+        # We save one copy in the MEDS Unsorted data directory
         with open(os.path.join(path_to_temp_dir, "metadata", "dataset.json"), "w") as f:
             json.dump(metadata, f)
 
@@ -634,7 +633,7 @@ def main():
         )
 
         # # # # # # # # # # # # # # # # # # # # # # # # # # # # # #
-        # Convert all "measurements" to MEDS Flat, write to disk  #
+        # Convert all "measurements" to MEDS Unsorted, write to disk  #
         # # # # # # # # # # # # # # # # # # # # # # # # # # # # # #
 
         tables: Dict[str, Any] = {
@@ -713,7 +712,7 @@ def main():
                     table_details,
                     concept_id_map_data,
                     concept_name_map_data,
-                    path_to_MEDS_flat_dir,
+                    path_to_MEDS_unsorted_dir,
                     path_to_decompressed_dir,
                     args.verbose,
                 )
@@ -727,7 +726,7 @@ def main():
                     table_details,
                     concept_id_map_data,
                     concept_name_map_data,
-                    path_to_MEDS_flat_dir,
+                    path_to_MEDS_unsorted_dir,
                     args.verbose,
                 )
                 for table_files in split_list(parquet_table_files, args.num_shards)
@@ -737,7 +736,7 @@ def main():
         rng.shuffle(all_csv_tasks)
         rng.shuffle(all_parquet_tasks)
 
-        print("Decompressing OMOP tables, mapping to MEDS Flat format, writing to disk...")
+        print("Decompressing OMOP tables, mapping to MEDS Unsorted format, writing to disk...")
         if args.num_proc > 1:
             os.environ["POLARS_MAX_THREADS"] = "1"
             with multiprocessing.get_context("spawn").Pool(args.num_proc) as pool:
@@ -763,7 +762,7 @@ def main():
         # TODO: Do we need to do this more often so as to reduce maximum disk storage?
         shutil.rmtree(path_to_decompressed_dir)
 
-        print("Finished converting dataset to MEDS Flat.")
+        print("Finished converting dataset to MEDS Unsorted.")
 
     # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # #
     # Collate measurements into timelines for each patient, by shard

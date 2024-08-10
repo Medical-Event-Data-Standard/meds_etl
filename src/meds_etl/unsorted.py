@@ -132,7 +132,7 @@ def create_and_write_shards_from_table(
 
 
 def process_file(event_file: str, *, temp_dir: str, num_shards: int, property_columns: List[Tuple[str, pl.DataType]]):
-    """Partition MEDS Flat files into shards based on patient ID and write to disk"""
+    """Partition MEDS Unsorted files into shards based on patient ID and write to disk"""
     logging.info("Working on ", event_file)
 
     table = pl.scan_parquet(event_file)
@@ -148,7 +148,7 @@ def sort_polars(
     num_shards: int = 100,
     num_proc: int = 1,
 ) -> None:
-    """A polars implementation of convert_flat_to_meds"""
+    """A polars implementation of the core sorting algorithm"""
     if not os.path.exists(source_unsorted_path):
         raise ValueError(f'The source MEDS Unsorted folder ("{source_unsorted_path}") does not seem to exist?')
 
@@ -195,7 +195,7 @@ def sort_polars(
                 property_columns=property_columns,
             )
 
-            print("Partitioning MEDS Flat files into shards based on patient ID and writing to disk...")
+            print("Partitioning MEDS Unsorted files into shards based on patient ID and writing to disk...")
             with tqdm(total=len(tasks)) as pbar:
                 for _ in pool.imap_unordered(processor, tasks):
                     pbar.update()
@@ -269,12 +269,12 @@ def sort(
 ) -> None:
     """
     Args:
-        source_flat_path (str): Path to directory where MEDS Flat files are stored, structured as follows:
-            {source_flat_path}
-            |-- metadata.json [OPTIONAL]
-            |-- flat_data
-                |-- {table_name}_{map_index}.parquet
-        target_meds_path (str): Path to directory the MEDS files (converted from MEDS Flat) should be stored
+        source_unsorted_path (str): Path to directory where MEDS Unsorted files are stored, structured as follows:
+            {source_unsorted_path}
+            |-- metadata
+            |-- unsorted_data
+                |-- *.parquet
+        target_meds_path (str): Path to directory the MEDS files (converted from MEDS Unsorted) should be stored
         num_shards (str): Number of patient shards, more shards -> fewer patients per join, only relevant for polars
         num_proc (int): Number of parallel processes
         time_formats (str): Expected possible datetime formats in the `time` column.
@@ -283,15 +283,17 @@ def sort(
         None
     """
     if not os.path.exists(source_unsorted_path):
-        raise ValueError(f'The source MEDS Flat folder ("{source_unsorted_path}") does not seem to exist?')
+        raise ValueError(f'The source MEDS Unsorted folder ("{source_unsorted_path}") does not seem to exist?')
 
     if not os.path.exists(os.path.join(source_unsorted_path, "metadata", "dataset.json")):
         raise ValueError(
-            f'The source MEDS Flat folder ("{source_unsorted_path}") does not have a dataset metadata file?'
+            f'The source MEDS Unsorted folder ("{source_unsorted_path}") does not have a dataset metadata file?'
         )
 
     if not os.path.exists(os.path.join(source_unsorted_path, "unsorted_data")):
-        raise ValueError(f'The source MEDS Flat folder ("{source_unsorted_path}") does not have a unsorted_data folder')
+        raise ValueError(
+            f'The source MEDS Unsorted folder ("{source_unsorted_path}") does not have a unsorted_data folder'
+        )
 
     if backend == "cpp":
         import meds_etl_cpp
