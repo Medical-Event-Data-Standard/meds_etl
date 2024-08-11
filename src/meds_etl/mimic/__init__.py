@@ -517,5 +517,5 @@ def main():
 
     jsonschema.validate(instance=metadata, schema=meds.dataset_metadata_schema)
 
-    with open(os.path.join(args.destination, "metadata", "metadata.json"), "w") as f:
+    with open(os.path.join(args.destination, "metadata", "dataset.json"), "w") as f:
         json.dump(metadata, f)
