@@ -26,7 +26,7 @@ jobs:
         python -m pip install --upgrade pip
         python -m pip install flake8 pytest
     - name: Install MEDS ETL
-      run: python -m pip install ".[duckdb,cpp]"
+      run: python -m pip install ".[cpp]"
     - name: Download MIMIC-IV-Demo (v2.2)
       run: |
         # Download the MIMIC-IV-Demo dataset (v2.2) to a tests/data/ directory
