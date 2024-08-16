@@ -13,14 +13,14 @@ dependencies = [
     "pyarrow >= 8",
     "polars >= 1.1",
     "jsonschema >= 4.0.0",
-    "meds >= 0.3, <= 0.4",
+    "meds == 0.3.1",
     "typing_extensions >= 4.0",
     "tqdm >= 4.6.0",
 ]
 
 [project.optional-dependencies]
 cpp = [
-    "meds_etl_cpp == 0.3.1",
+    "meds_etl_cpp == 0.3.2",
 ]
 
 

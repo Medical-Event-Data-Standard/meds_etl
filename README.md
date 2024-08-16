@@ -76,7 +76,7 @@ wget -r -N -c --no-host-directories --cut-dirs=1 -np -P tests/data https://physi
 
 ## MEDS Unsorted
 
-MEDS itself can be a bit tricky to generate as it has ordering and shard location requirements for events (events for a particular patient must be sorted by time and can only be in one shard).
+MEDS itself can be a bit tricky to generate as it has ordering and shard location requirements for events (events for a particular subject must be sorted by time and can only be in one shard).
 
 In order to make things simpler for users, this package provides a special MEDS Unsorted schema and ETLs that transform between MEDS Unsorted and MEDS.
 

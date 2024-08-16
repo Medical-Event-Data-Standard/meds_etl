@@ -363,7 +363,7 @@ def main():
                 batch_size=10_000_000,
             )
 
-            patient_id = pl.col("subject_id").cast(pl.Int64)
+            subject_id = pl.col("subject_id").cast(pl.Int64)
             time = meds_etl.utils.parse_time(mapping_code["time"], MIMIC_TIME_FORMATS)
 
             code = mapping_code["code"]
@@ -398,7 +398,7 @@ def main():
                     table_csv = table_csv.filter(time.is_not_null())
 
                 columns = {
-                    "patient_id": patient_id,
+                    "subject_id": subject_id,
                     "time": time,
                     "code": code,
                 }

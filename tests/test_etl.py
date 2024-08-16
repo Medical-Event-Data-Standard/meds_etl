@@ -70,8 +70,8 @@ class TestMimicETL:
         self.__class__.dataset = pl.read_parquet(path)
         assert self.dataset is not None, "Failed to load the dataset."
 
-    def test_number_of_patients(self):
+    def test_number_of_subjects(self):
         """
-        The demo contains 100 patients.
+        The demo contains 100 subjects.
         """
-        assert self.dataset.n_unique("patient_id") == 100
+        assert self.dataset.n_unique("subject_id") == 100

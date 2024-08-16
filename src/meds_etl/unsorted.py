@@ -20,7 +20,7 @@ if mp is None:
     # Could not get forkserver, just use the default
     mp = multiprocessing.get_context()
 
-KNOWN_COLUMNS = {"patient_id", "numeric_value", "time", "code"}
+KNOWN_COLUMNS = {"subject_id", "numeric_value", "time", "code"}
 
 
 def get_columns(event_file: str) -> Mapping[str, pl.DataType]:
@@ -43,13 +43,13 @@ def get_columns(event_file: str) -> Mapping[str, pl.DataType]:
         IOError: If there's an error reading the file schema.
 
     Example:
-        Suppose we have a Parquet file 'patient_data.parquet' with the following schema:
-            - patient_id (int64)
+        Suppose we have a Parquet file 'subject_data.parquet' with the following schema:
+            - subject_id (int64)
             - name (string)
             - visit_date (date32)
 
-        Calling `get_parquet_columns('patient_data.parquet')` would return:
-            {'patient_id': 'int64', 'name': 'string', 'visit_date': 'date32'}
+        Calling `get_parquet_columns('subject_data.parquet')` would return:
+            {'subject_id': 'int64', 'name': 'string', 'visit_date': 'date32'}
     """
     schema = pl.scan_parquet(event_file).collect_schema()
     return dict(schema)
@@ -66,7 +66,7 @@ def get_property_columns(table, properties_columns):
     return cols
 
 
-def verify_shard(shard, event_file, important_columns=("patient_id", "time", "code")):
+def verify_shard(shard, event_file, important_columns=("subject_id", "time", "code")):
     """Verify that every shard has non-null important columns
 
     Args:
@@ -93,8 +93,8 @@ def create_and_write_shards_from_table(
     # Convert all the column names to lower case
     table = table.rename({c: c.lower() for c in table.collect_schema().names()})
 
-    # Convert patient IDs into integers
-    patient_id = pl.col("patient_id").cast(pl.Int64())
+    # Convert subject IDs into integers
+    subject_id = pl.col("subject_id").cast(pl.Int64())
 
     # Convert time column into polars Datetime/`datetime[μs]` type
     time = pl.col("time")
@@ -109,19 +109,19 @@ def create_and_write_shards_from_table(
 
     columns = (
         [
-            ("patient_id", patient_id),
+            ("subject_id", subject_id),
             ("time", time),
             ("code", code),
             ("numeric_value", numeric_value),
         ]
         + get_property_columns(table, property_columns)
-        + [("shard", patient_id.hash(213345) % num_shards)]
+        + [("shard", subject_id.hash(213345) % num_shards)]
     )
 
     exprs = [b.alias(a) for a, b in columns]
 
     # Actually execute the typecast conversion, partition table into
-    # shards based on hashed patient ID
+    # shards based on hashed subject ID
     event_data = table.select(*exprs).collect().partition_by(["shard"], as_dict=True, maintain_order=False)
 
     # Validate/verify each shard's important columns and write to disk
@@ -132,7 +132,7 @@ def create_and_write_shards_from_table(
 
 
 def process_file(event_file: str, *, temp_dir: str, num_shards: int, property_columns: List[Tuple[str, pl.DataType]]):
-    """Partition MEDS Unsorted files into shards based on patient ID and write to disk"""
+    """Partition MEDS Unsorted files into shards based on subject ID and write to disk"""
     logging.info("Working on ", event_file)
 
     table = pl.scan_parquet(event_file)
@@ -195,7 +195,7 @@ def sort_polars(
                 property_columns=property_columns,
             )
 
-            print("Partitioning MEDS Unsorted files into shards based on patient ID and writing to disk...")
+            print("Partitioning MEDS Unsorted files into shards based on subject ID and writing to disk...")
             with tqdm(total=len(tasks)) as pbar:
                 for _ in pool.imap_unordered(processor, tasks):
                     pbar.update()
@@ -222,7 +222,7 @@ def sort_polars(
     data_dir = os.path.join(target_meds_path, "data")
     os.mkdir(data_dir)
 
-    print("Collating source table data, shard by shard, to create patient timelines...")
+    print("Collating source table data, shard by shard, to create subject timelines...")
     print("(Gathering events into timelines)")
     for shard_index in tqdm(range(num_shards), total=num_shards):
         logging.info("Processing shard ", shard_index)
@@ -234,9 +234,9 @@ def sort_polars(
 
         all_events = pl.concat(events)
 
-        sorted_events = all_events.drop("shard").sort(by=(pl.col("patient_id"), pl.col("time"), pl.col("code")))
+        sorted_events = all_events.drop("shard").sort(by=(pl.col("subject_id"), pl.col("time"), pl.col("code")))
 
-        # We now have our data in the final form, grouped_by_patient, but we have to do one final transformation
+        # We now have our data in the final form, grouped_by_subject, but we have to do one final transformation
         # We have to convert from polar's large_list to list because large_list is not supported by huggingface
 
         # We do this conversion using the pyarrow library
@@ -275,7 +275,7 @@ def sort(
             |-- unsorted_data
                 |-- *.parquet
         target_meds_path (str): Path to directory the MEDS files (converted from MEDS Unsorted) should be stored
-        num_shards (str): Number of patient shards, more shards -> fewer patients per join, only relevant for polars
+        num_shards (str): Number of subject shards, more shards -> fewer subjects per join, only relevant for polars
         num_proc (int): Number of parallel processes
         time_formats (str): Expected possible datetime formats in the `time` column.
 

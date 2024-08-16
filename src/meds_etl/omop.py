@@ -50,7 +50,7 @@ def get_table_files(path_to_src_omop_dir: str, table_name: str, table_details={}
     """Retrieve all .csv/.csv.gz/.parquet files for the OMOP table given by `table_name` in `path_to_src_omop_dir`
 
     Because OMOP tables can be quite large for datasets comprising millions
-    of patients, those tables are often split into compressed shards. So
+    of subjects, those tables are often split into compressed shards. So
     the `measurements` "table" might actually be a folder containing files
     `000000000000.csv.gz` up to `000000000152.csv.gz`. This function
     takes a path corresponding to an OMOP table with its standard name (e.g.,
@@ -154,11 +154,11 @@ def write_event_data(
         batch = batch.rename({c: c.lower() for c in batch.collect_schema().names()})
         schema = batch.collect_schema()
         # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # #
-        # Determine what to use for the `patient_id` column in MEDS Unsorted  #
+        # Determine what to use for the `subject_id` column in MEDS Unsorted  #
         # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # #
 
-        # Define the MEDS Unsorted `patient_id` (left) to be the `person_id` columns in OMOP (right)
-        patient_id = pl.col("person_id").cast(pl.Int64)
+        # Define the MEDS Unsorted `subject_id` (left) to be the `person_id` columns in OMOP (right)
+        subject_id = pl.col("person_id").cast(pl.Int64)
 
         # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # #
         # Determine what to use for the `time`                          #
@@ -271,7 +271,7 @@ def write_event_data(
 
         # Every key in the `metadata` dictionary will become a distinct
         # column in the MEDS file; for each event, the metadata column
-        # and its corresponding value for a given patient will be stored
+        # and its corresponding value for a given subject will be stored
         # as event metadata in the MEDS representation
         metadata = {
             "table": pl.lit(table_name, dtype=str),
@@ -296,7 +296,7 @@ def write_event_data(
         batch = batch.filter(code.is_not_null())
 
         columns = {
-            "patient_id": patient_id,
+            "subject_id": subject_id,
             "time": time,
             "code": code,
         }
@@ -553,7 +553,7 @@ def main():
         type=int,
         default=100,
         help="Number of shards to use for converting MEDS from the unsorted format "
-        "to MEDS (patients are distributed approximately uniformly at "
+        "to MEDS (subjects are distributed approximately uniformly at "
         "random across shards and collation/joining of OMOP tables is "
         "performed on a shard-by-shard basis).",
     )
@@ -693,8 +693,8 @@ def main():
         concept_name_map_data = pickle.dumps(concept_name_map)
 
         # Create a separate task for each table
-        # Each subprocess will read in a decompressed file and put all measurements for a given patient
-        # into that patient's corresponding shard. This makes creating patient timelines downstream
+        # Each subprocess will read in a decompressed file and put all measurements for a given subject
+        # into that subject's corresponding shard. This makes creating subject timelines downstream
         # (where timelines incorporate measurements from across different tables) much less RAM intensive.
         all_csv_tasks = []
         all_parquet_tasks = []
@@ -765,7 +765,7 @@ def main():
         print("Finished converting dataset to MEDS Unsorted.")
 
     # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # #
-    # Collate measurements into timelines for each patient, by shard
+    # Collate measurements into timelines for each subject, by shard
     # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # #
 
     print("Converting from MEDS Unsorted to MEDS...")

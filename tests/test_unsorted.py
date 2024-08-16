@@ -22,8 +22,8 @@ except ImportError:
     meds_etl_cpp = None
 
 
-def get_random_patient(patient_id: int, include_properties=True) -> List[dict]:
-    random.seed(patient_id)
+def get_random_subject(subject_id: int, include_properties=True) -> List[dict]:
+    random.seed(subject_id)
 
     epoch = datetime.datetime(1990, 1, 1)
     birth = epoch + datetime.timedelta(days=random.randint(100, 1000))
@@ -32,10 +32,10 @@ def get_random_patient(patient_id: int, include_properties=True) -> List[dict]:
     gender = "Gender/" + random.choice(["F", "M"])
     race = "Race/" + random.choice(["White", "Non-White"])
 
-    patient = [
-        {"patient_id": patient_id, "time": birth, "code": meds.birth_code},
-        {"patient_id": patient_id, "time": birth, "code": gender},
-        {"patient_id": patient_id, "time": birth, "code": race},
+    subject = [
+        {"subject_id": subject_id, "time": birth, "code": meds.birth_code},
+        {"subject_id": subject_id, "time": birth, "code": gender},
+        {"subject_id": subject_id, "time": birth, "code": race},
     ]
 
     code_cats = ["ICD9CM", "RxNorm"]
@@ -47,30 +47,30 @@ def get_random_patient(patient_id: int, include_properties=True) -> List[dict]:
             code = str(random.randint(0, 10000))
             if len(code) > 3:
                 code = code[:3] + "." + code[3:]
-        if patient_id == 0 and i == 0:
+        if subject_id == 0 and i == 0:
             code_cat = "Random"
         current_date = current_date + datetime.timedelta(days=random.randint(1, 100))
         code = code_cat + "/" + code
-        patient.append(
-            {"patient_id": patient_id, "time": current_date, "code": code, "number": 100, "ontology": code_cat}
+        subject.append(
+            {"subject_id": subject_id, "time": current_date, "code": code, "number": 100, "ontology": code_cat}
         )
 
     if not include_properties:
-        for e in patient:
+        for e in subject:
             if "ontology" in e:
                 del e["ontology"]
             if "number" in e:
                 del e["number"]
 
-    patient.sort(key=lambda a: (a["time"], a["code"]))
-    return patient
+    subject.sort(key=lambda a: (a["time"], a["code"]))
+    return subject
 
 
-def create_example_patients(include_properties=True):
-    patients = []
+def create_example_subjects(include_properties=True):
+    subjects = []
     for i in range(200):
-        patients.extend(get_random_patient(i, include_properties=include_properties))
-    return patients
+        subjects.extend(get_random_subject(i, include_properties=include_properties))
+    return subjects
 
 
 def create_dataset(tmp_path: pathlib.Path, include_properties=True):
@@ -85,12 +85,12 @@ def create_dataset(tmp_path: pathlib.Path, include_properties=True):
             ("ontology", pa.large_string()),
         ]
 
-    patients = create_example_patients(include_properties=include_properties)
-    patient_schema = meds.data_schema(properties_schema)
+    subjects = create_example_subjects(include_properties=include_properties)
+    subject_schema = meds.data_schema(properties_schema)
 
-    patient_table = pa.Table.from_pylist(patients, patient_schema)
+    subject_table = pa.Table.from_pylist(subjects, subject_schema)
 
-    pq.write_table(patient_table, tmp_path / "data" / "patients.parquet")
+    pq.write_table(subject_table, tmp_path / "data" / "subjects.parquet")
 
     metadata = {
         "dataset_name": "synthetic datata",
@@ -106,10 +106,10 @@ def create_dataset(tmp_path: pathlib.Path, include_properties=True):
     with open(tmp_path / "metadata" / "dataset.json", "w") as f:
         json.dump(metadata, f)
 
-    return patients, patient_schema
+    return subjects, subject_schema
 
 
-def roundtrip_helper(tmp_path: pathlib.Path, patients: List[meds.Patient], num_proc: int):
+def roundtrip_helper(tmp_path: pathlib.Path, subjects: List[meds.subject], num_proc: int):
     for backend in ["polars", "cpp"]:
         if (backend == "cpp") and (meds_etl_cpp is None):
             continue
@@ -129,47 +129,47 @@ def roundtrip_helper(tmp_path: pathlib.Path, patients: List[meds.Patient], num_p
 
         print(meds_dataset2)
 
-        patient_table = pa.concat_tables(
+        subject_table = pa.concat_tables(
             [pq.read_table(meds_dataset2 / "data" / i) for i in os.listdir(meds_dataset2 / "data")]
         )
-        final_patients = patient_table.to_pylist()
-        final_patients.sort(key=lambda a: (a["patient_id"], a["time"], a["code"]))
+        final_subjects = subject_table.to_pylist()
+        final_subjects.sort(key=lambda a: (a["subject_id"], a["time"], a["code"]))
 
-        assert final_patients == patients
+        assert final_subjects == subjects
 
 
 def test_roundtrip_with_properties(tmp_path: pathlib.Path):
     meds_dataset = tmp_path / "meds"
     create_dataset(meds_dataset)
-    patients = pq.read_table(meds_dataset / "data" / "patients.parquet").to_pylist()
-    patients.sort(key=lambda a: a["patient_id"])
+    subjects = pq.read_table(meds_dataset / "data" / "subjects.parquet").to_pylist()
+    subjects.sort(key=lambda a: a["subject_id"])
 
-    roundtrip_helper(tmp_path, patients, 1)
-    roundtrip_helper(tmp_path, patients, 4)
+    roundtrip_helper(tmp_path, subjects, 1)
+    roundtrip_helper(tmp_path, subjects, 4)
 
 
 def test_roundtrip_no_properties(tmp_path: pathlib.Path):
     meds_dataset = tmp_path / "meds"
     create_dataset(meds_dataset, include_properties=False)
-    patients = pq.read_table(meds_dataset / "data" / "patients.parquet").to_pylist()
-    patients.sort(key=lambda a: a["patient_id"])
+    subjects = pq.read_table(meds_dataset / "data" / "subjects.parquet").to_pylist()
+    subjects.sort(key=lambda a: a["subject_id"])
 
-    roundtrip_helper(tmp_path, patients, 1)
-    roundtrip_helper(tmp_path, patients, 4)
+    roundtrip_helper(tmp_path, subjects, 1)
+    roundtrip_helper(tmp_path, subjects, 4)
 
 
 def test_shuffle_polars(tmp_path: pathlib.Path):
     meds_dataset = tmp_path / "meds"
     create_dataset(meds_dataset)
 
-    patients = pq.read_table(meds_dataset / "data" / "patients.parquet")
+    subjects = pq.read_table(meds_dataset / "data" / "subjects.parquet")
 
     meds_flat_dataset = tmp_path / "meds_unsorted"
     meds_flat_dataset.mkdir()
     shutil.copytree(meds_dataset / "metadata", meds_flat_dataset / "metadata")
     (meds_flat_dataset / "unsorted_data").mkdir()
 
-    indices = list(range(len(patients)))
+    indices = list(range(len(subjects)))
     random.shuffle(indices)
 
     num_parts = 3
@@ -177,28 +177,28 @@ def test_shuffle_polars(tmp_path: pathlib.Path):
 
     for a in range(num_parts):
         i = indices[a * rows_per_part : (a + 1) * rows_per_part]
-        shuffled_patients = patients.take(i)
-        pq.write_table(shuffled_patients, meds_flat_dataset / "unsorted_data" / (str(a) + ".parquet"))
+        shuffled_subjects = subjects.take(i)
+        pq.write_table(shuffled_subjects, meds_flat_dataset / "unsorted_data" / (str(a) + ".parquet"))
 
     meds_dataset2 = tmp_path / "meds2"
 
     meds_etl.unsorted.sort(str(meds_flat_dataset), str(meds_dataset2), num_shards=10, backend="polars")
 
-    seen_patient_ids: Set[int] = set()
+    seen_subject_ids: Set[int] = set()
 
     for result in glob.glob(str(meds_dataset2 / "data" / "*")):
         print(result)
         data = pq.read_table(result)
 
-        patient_ids = set(data["patient_id"])
+        subject_ids = set(data["subject_id"])
 
-        assert len(seen_patient_ids & patient_ids) == 0
+        assert len(seen_subject_ids & subject_ids) == 0
 
-        seen_patient_ids |= patient_ids
+        seen_subject_ids |= subject_ids
 
-        mask = pa.compute.is_in(patients["patient_id"], pa.array(patient_ids))
+        mask = pa.compute.is_in(subjects["subject_id"], pa.array(subject_ids))
 
-        comparison = patients.filter(mask)
+        comparison = subjects.filter(mask)
 
         assert comparison.shape == data.shape
         assert comparison.schema == data.schema
@@ -210,14 +210,14 @@ def test_shuffle_cpp(tmp_path: pathlib.Path):
     meds_dataset = tmp_path / "meds"
     create_dataset(meds_dataset)
 
-    patients = pq.read_table(meds_dataset / "data" / "patients.parquet")
+    subjects = pq.read_table(meds_dataset / "data" / "subjects.parquet")
 
     meds_flat_dataset = tmp_path / "meds_unsorted"
     meds_flat_dataset.mkdir()
     shutil.copytree(meds_dataset / "metadata", meds_flat_dataset / "metadata")
     (meds_flat_dataset / "unsorted_data").mkdir()
 
-    indices = list(range(len(patients)))
+    indices = list(range(len(subjects)))
     random.shuffle(indices)
 
     num_parts = 3
@@ -225,34 +225,34 @@ def test_shuffle_cpp(tmp_path: pathlib.Path):
 
     for a in range(num_parts):
         i = indices[a * rows_per_part : (a + 1) * rows_per_part]
-        shuffled_patients = patients.take(i)
-        pq.write_table(shuffled_patients, meds_flat_dataset / "unsorted_data" / (str(a) + ".parquet"))
+        shuffled_subjects = subjects.take(i)
+        pq.write_table(shuffled_subjects, meds_flat_dataset / "unsorted_data" / (str(a) + ".parquet"))
 
     meds_dataset2 = tmp_path / "meds2"
 
     meds_etl.unsorted.sort(str(meds_flat_dataset), str(meds_dataset2), num_shards=10, backend="cpp")
 
-    seen_patient_ids: Set[int] = set()
+    seen_subject_ids: Set[int] = set()
 
     for result in glob.glob(str(meds_dataset2 / "data" / "*")):
         print(result)
         data = pq.read_table(result).sort_by(
             [
-                ("patient_id", "ascending"),
+                ("subject_id", "ascending"),
                 ("time", "ascending"),
                 ("code", "ascending"),
             ]
         )
 
-        patient_ids = set(data["patient_id"])
+        subject_ids = set(data["subject_id"])
 
-        assert len(seen_patient_ids & patient_ids) == 0
+        assert len(seen_subject_ids & subject_ids) == 0
 
-        seen_patient_ids |= patient_ids
+        seen_subject_ids |= subject_ids
 
-        mask = pa.compute.is_in(patients["patient_id"], pa.array(patient_ids))
+        mask = pa.compute.is_in(subjects["subject_id"], pa.array(subject_ids))
 
-        comparison = patients.filter(mask)
+        comparison = subjects.filter(mask)
 
         print(data.schema)
         print(comparison.schema)
