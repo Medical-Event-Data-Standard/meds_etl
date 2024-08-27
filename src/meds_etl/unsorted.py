@@ -66,7 +66,7 @@ def get_property_columns(table, properties_columns):
     return cols
 
 
-def verify_shard(shard, event_file, important_columns=("subject_id", "time", "code")):
+def verify_shard(shard, event_file, important_columns=("subject_id", "code")):
     """Verify that every shard has non-null important columns
 
     Args:
@@ -234,7 +234,7 @@ def sort_polars(
 
         all_events = pl.concat(events)
 
-        sorted_events = all_events.drop("shard").sort(by=(pl.col("subject_id"), pl.col("time"), pl.col("code")))
+        sorted_events = all_events.drop("shard").sort(by=(pl.col("subject_id"), pl.col("time"), pl.col("code")), nulls_last=False)
 
         # We now have our data in the final form, grouped_by_subject, but we have to do one final transformation
         # We have to convert from polar's large_list to list because large_list is not supported by huggingface
