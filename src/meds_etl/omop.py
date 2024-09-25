@@ -39,7 +39,7 @@ def split_list(ls: List[Any], parts: int) -> List[List[Any]]:
     result = []
 
     for i in range(parts):
-        sublist = ls[i * per_list: (i + 1) * per_list]
+        sublist = ls[i * per_list : (i + 1) * per_list]
         if len(sublist) > 0:
             result.append(sublist)
 
@@ -140,12 +140,12 @@ def cast_to_datetime(schema: Any, column: str, move_to_end_of_day: bool = False)
 
 
 def write_event_data(
-        path_to_MEDS_unsorted_dir: str,
-        get_batch: Any,
-        table_name: str,
-        all_table_details: Iterable[Mapping[str, Any]],
-        concept_id_map: Mapping[int, str],
-        concept_name_map: Mapping[int, str],
+    path_to_MEDS_unsorted_dir: str,
+    get_batch: Any,
+    table_name: str,
+    all_table_details: Iterable[Mapping[str, Any]],
+    concept_id_map: Mapping[int, str],
+    concept_name_map: Mapping[int, str],
 ) -> pl.LazyFrame:
     """Write event data from the given table to event files in MEDS Unsorted format"""
     for table_details in all_table_details:
@@ -505,7 +505,7 @@ def extract_metadata(path_to_src_omop_dir: str, path_to_decompressed_dir: str, v
             )
 
             for concept_id_1, concept_id_2 in zip(
-                    custom_relationships["concept_id_1"], custom_relationships["concept_id_2"]
+                custom_relationships["concept_id_1"], custom_relationships["concept_id_2"]
             ):
                 if concept_id_1 in concept_id_map and concept_id_2 in concept_id_map:
                     code_metadata[concept_id_map[concept_id_1]]["parent_codes"].append(concept_id_map[concept_id_2])
@@ -546,9 +546,9 @@ def main():
         "path_to_src_omop_dir",
         type=str,
         help="Path to the OMOP source directory, e.g. "
-             "`~/Downloads/data/som-rit-phi-starr-prod.starr_omop_cdm5_confidential_2023_11_19` "
-             " for STARR-OMOP full or "
-             "`~/Downloads/data/som-rit-phi-starr-prod.starr_omop_cdm5_confidential_1pcent_2024_02_09`",
+        "`~/Downloads/data/som-rit-phi-starr-prod.starr_omop_cdm5_confidential_2023_11_19` "
+        " for STARR-OMOP full or "
+        "`~/Downloads/data/som-rit-phi-starr-prod.starr_omop_cdm5_confidential_1pcent_2024_02_09`",
     )
     parser.add_argument("path_to_dest_meds_dir", type=str, help="Path to where the output MEDS files will be stored")
     parser.add_argument(
@@ -556,9 +556,9 @@ def main():
         type=int,
         default=100,
         help="Number of shards to use for converting MEDS from the unsorted format "
-             "to MEDS (subjects are distributed approximately uniformly at "
-             "random across shards and collation/joining of OMOP tables is "
-             "performed on a shard-by-shard basis).",
+        "to MEDS (subjects are distributed approximately uniformly at "
+        "random across shards and collation/joining of OMOP tables is "
+        "performed on a shard-by-shard basis).",
     )
     parser.add_argument("--num_proc", type=int, default=1, help="Number of vCPUs to use for performing the MEDS ETL")
     parser.add_argument(
@@ -573,7 +573,7 @@ def main():
         dest="continue_job",
         action="store_true",
         help="If set, the job continues from a previous run, starting after the "
-             "conversion to MEDS Unsorted but before converting from MEDS Unsorted to MEDS.",
+        "conversion to MEDS Unsorted but before converting from MEDS Unsorted to MEDS.",
     )
 
     args = parser.parse_args()
