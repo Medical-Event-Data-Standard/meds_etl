@@ -221,7 +221,7 @@ def write_event_data(
 
             # Replace values in `concept_id` with the normalized concepts to which they are mapped
             # based on the `concept_id_map`
-            code = concept_id.replace_strict(concept_id_map, return_dtype=pl.Utf8())
+            code = concept_id.replace_strict(concept_id_map, return_dtype=pl.Utf8(), default=None)
 
         # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # #
         # Determine what to use for the `value`                       #
