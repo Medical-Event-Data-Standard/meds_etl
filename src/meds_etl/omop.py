@@ -282,7 +282,9 @@ def write_event_data(
 
         unit_columns = [pl.col(_) for _ in ["unit_source_value", "unit_concept_id"] if _ in schema.names()]
         if unit_columns:
-            metadata["unit"] = pl.coalesce(unit_columns)
+            unit_expr = pl.coalesce(unit_columns)
+            unit_label_expr = unit_expr.replace_strict(concept_id_map, return_dtype=pl.Utf8(), default=None)
+            metadata["unit"] = pl.coalesce([unit_label_expr, unit_expr])
 
         if "load_table_id" in schema.names():
             metadata["clarity_table"] = pl.col("load_table_id")
