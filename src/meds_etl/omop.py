@@ -280,11 +280,14 @@ def write_event_data(
         if "visit_occurrence_id" in schema.names():
             metadata["visit_id"] = pl.col("visit_occurrence_id")
 
-        unit_columns = [pl.col(_) for _ in ["unit_source_value", "unit_concept_id"] if _ in schema.names()]
+        unit_columns = []
+        if "unit_source_value" in schema.names():
+            unit_columns.append(pl.col("unit_source_value"))
+        if "unit_concept_id" in schema.names():
+            unit_columns.append(
+                pl.col("unit_concept_id").replace_strict(concept_id_map, return_dtype=pl.Utf8(), default=None))
         if unit_columns:
-            unit_expr = pl.coalesce(unit_columns)
-            unit_label_expr = unit_expr.replace_strict(concept_id_map, return_dtype=pl.Utf8(), default=None)
-            metadata["unit"] = pl.coalesce([unit_label_expr, unit_expr])
+            metadata["unit"] = pl.coalesce(unit_columns)
 
         if "load_table_id" in schema.names():
             metadata["clarity_table"] = pl.col("load_table_id")
