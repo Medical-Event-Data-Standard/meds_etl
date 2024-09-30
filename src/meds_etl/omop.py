@@ -221,7 +221,7 @@ def write_event_data(
 
             # Replace values in `concept_id` with the normalized concepts to which they are mapped
             # based on the `concept_id_map`
-            code = concept_id.replace_strict(concept_id_map, return_dtype=pl.Utf8())
+            code = concept_id.replace_strict(concept_id_map, return_dtype=pl.Utf8(), default=None)
 
         # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # #
         # Determine what to use for the `value`                       #
@@ -280,8 +280,14 @@ def write_event_data(
         if "visit_occurrence_id" in schema.names():
             metadata["visit_id"] = pl.col("visit_occurrence_id")
 
+        unit_columns = []
         if "unit_source_value" in schema.names():
-            metadata["unit"] = pl.col("unit_source_value")
+            unit_columns.append(pl.col("unit_source_value"))
+        if "unit_concept_id" in schema.names():
+            unit_columns.append(
+                pl.col("unit_concept_id").replace_strict(concept_id_map, return_dtype=pl.Utf8(), default=None))
+        if unit_columns:
+            metadata["unit"] = pl.coalesce(unit_columns)
 
         if "load_table_id" in schema.names():
             metadata["clarity_table"] = pl.col("load_table_id")
