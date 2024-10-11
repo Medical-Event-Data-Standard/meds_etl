@@ -89,7 +89,8 @@ def get_table_files(path_to_src_omop_dir: str, table_name: str, table_details={}
 def read_polars_df(fname: str) -> pl.DataFrame:
     """Read a file that might be a CSV or Parquet file"""
     if fname.endswith(".csv"):
-        return pl.read_csv(fname)
+        # Don't try to infer schema because it can cause errors with columns that look like ints but aren't
+        return pl.read_csv(fname, infer_schema=False)
     elif fname.endswith(".parquet"):
         return pl.read_parquet(fname)
     else:
@@ -449,7 +450,9 @@ def extract_metadata(path_to_src_omop_dir: str, path_to_decompressed_dir: str, v
     # and use it to generate metadata file as well as populate maps
     # from (concept ID -> concept code) and (concept ID -> concept name)
     print("Generating metadata from OMOP `concept` table")
-    for concept_file in tqdm(itertools.chain(*get_table_files(path_to_src_omop_dir, "concept"))):
+    for concept_file in tqdm(itertools.chain(*get_table_files(path_to_src_omop_dir, "concept")), 
+                             total=len(get_table_files(path_to_src_omop_dir, "concept")[0]), 
+                             desc="Generating metadata from OMOP `concept` table"):
         # Note: Concept table is often split into gzipped shards by default
         if verbose:
             print(concept_file)
@@ -489,7 +492,9 @@ def extract_metadata(path_to_src_omop_dir: str, path_to_decompressed_dir: str, v
 
     # Include map from custom concepts to normalized (ie standard ontology)
     # parent concepts, where possible, in the code_metadata dictionary
-    for concept_relationship_file in itertools.chain(*get_table_files(path_to_src_omop_dir, "concept_relationship")):
+    for concept_relationship_file in tqdm(itertools.chain(*get_table_files(path_to_src_omop_dir, "concept_relationship")), 
+                                                          total=len(get_table_files(path_to_src_omop_dir, "concept_relationship")), 
+                                                          desc="Generating metadata from OMOP `concept_relationship` table"):
         with load_file(path_to_decompressed_dir, concept_relationship_file) as f:
             # This table has `concept_id_1`, `concept_id_2`, `relationship_id` columns
             concept_relationship = read_polars_df(f.name)
@@ -516,7 +521,9 @@ def extract_metadata(path_to_src_omop_dir: str, path_to_decompressed_dir: str, v
     # Extract dataset metadata e.g., the CDM source name and its release date
     datasets: List[str] = []
     dataset_versions: List[str] = []
-    for cdm_source_file in itertools.chain(*get_table_files(path_to_src_omop_dir, "cdm_source")):
+    for cdm_source_file in tqdm(itertools.chain(*get_table_files(path_to_src_omop_dir, "cdm_source")),
+                                total=get_table_files(path_to_src_omop_dir, "cdm_source"),
+                                desc="Extracting dataset metadata"):
         with load_file(path_to_decompressed_dir, cdm_source_file) as f:
             cdm_source = read_polars_df(f.name)
             cdm_source = cdm_source.rename({c: c.lower() for c in cdm_source.columns})
@@ -568,7 +575,7 @@ def main():
         "--backend",
         type=str,
         default="polars",
-        help="The backend to use when performing an ETL. See the README for a discussion on possible backends.",
+        help="The backend to use when converting from MEDS Unsorted to MEDS in the ETL. See the README for a discussion on possible backends.",
     )
     parser.add_argument("--verbose", type=int, default=0)
     parser.add_argument(
