@@ -668,15 +668,7 @@ def main():
             "drug_exposure": {
                 "concept_id_field": "drug_concept_id",
             },
-            "visit": [
-                {
-                    "fallback_concept_id": DEFAULT_VISIT_CONCEPT_ID,
-                    "file_suffix": "occurrence"
-                },
-                {
-                    "concept_id_field": "discharged_to_concept_id",
-                },
-            ],
+            "visit": {"fallback_concept_id": DEFAULT_VISIT_CONCEPT_ID, "file_suffix": "occurrence"},
             "condition": {
                 "file_suffix": "occurrence",
             },
