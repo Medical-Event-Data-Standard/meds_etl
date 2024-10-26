@@ -52,7 +52,7 @@ def test_discharged_to_concept_id_correct():
             },
             concept_name_map={9201: "Inpatient Visit", 38004453: "Home", 319835: "Hypertension", 45763524: "Diabetes"},
         )
-        expected_meds = pl.read_parquet(Path(tmpdir).glob("*.parquet"))
+        expected_meds = pl.read_parquet(list(Path(tmpdir).glob("*.parquet")))
         assert len(expected_meds) == 2
         expected_meds_dicts = expected_meds.sort("time").to_dicts()
         assert expected_meds_dicts[0]["code"] == "Visit/IP"
