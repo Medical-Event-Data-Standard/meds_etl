@@ -294,8 +294,7 @@ def write_event_data(
             unit_columns.append(pl.col("unit_source_value"))
         if "unit_concept_id" in schema.names():
             unit_columns.append(
-                pl.col("unit_concept_id").replace_strict(concept_id_map, return_dtype=pl.Utf8(), default=None)
-            )
+                pl.col("unit_concept_id").replace_strict(concept_id_map, return_dtype=pl.Utf8(), default=None))
         if unit_columns:
             metadata["unit"] = pl.coalesce(unit_columns)
 
@@ -459,12 +458,9 @@ def extract_metadata(path_to_src_omop_dir: str, path_to_decompressed_dir: str, v
     # and use it to generate metadata file as well as populate maps
     # from (concept ID -> concept code) and (concept ID -> concept name)
     print("Generating metadata from OMOP `concept` table")
-    for concept_file in tqdm(
-        itertools.chain(*get_table_files(path_to_src_omop_dir, "concept")),
-        total=len(get_table_files(path_to_src_omop_dir, "concept")[0])
-        + len(get_table_files(path_to_src_omop_dir, "concept")[1]),
-        desc="Generating metadata from OMOP `concept` table",
-    ):
+    for concept_file in tqdm(itertools.chain(*get_table_files(path_to_src_omop_dir, "concept")),
+                             total=len(get_table_files(path_to_src_omop_dir, "concept")[0]) + len(get_table_files(path_to_src_omop_dir, "concept")[1]),
+                             desc="Generating metadata from OMOP `concept` table"):
         # Note: Concept table is often split into gzipped shards by default
         if verbose:
             print(concept_file)
@@ -504,12 +500,9 @@ def extract_metadata(path_to_src_omop_dir: str, path_to_decompressed_dir: str, v
 
     # Include map from custom concepts to normalized (ie standard ontology)
     # parent concepts, where possible, in the code_metadata dictionary
-    for concept_relationship_file in tqdm(
-        itertools.chain(*get_table_files(path_to_src_omop_dir, "concept_relationship")),
-        total=len(get_table_files(path_to_src_omop_dir, "concept_relationship")[0])
-        + len(get_table_files(path_to_src_omop_dir, "concept_relationship")[1]),
-        desc="Generating metadata from OMOP `concept_relationship` table",
-    ):
+    for concept_relationship_file in tqdm(itertools.chain(*get_table_files(path_to_src_omop_dir, "concept_relationship")),
+                                                          total=len(get_table_files(path_to_src_omop_dir, "concept_relationship")[0]) + len(get_table_files(path_to_src_omop_dir, "concept_relationship")[1]),
+                                                          desc="Generating metadata from OMOP `concept_relationship` table"):
         with load_file(path_to_decompressed_dir, concept_relationship_file) as f:
             # This table has `concept_id_1`, `concept_id_2`, `relationship_id` columns
             concept_relationship = read_polars_df(f.name)
@@ -536,12 +529,9 @@ def extract_metadata(path_to_src_omop_dir: str, path_to_decompressed_dir: str, v
     # Extract dataset metadata e.g., the CDM source name and its release date
     datasets: List[str] = []
     dataset_versions: List[str] = []
-    for cdm_source_file in tqdm(
-        itertools.chain(*get_table_files(path_to_src_omop_dir, "cdm_source")),
-        total=len(get_table_files(path_to_src_omop_dir, "cdm_source")[0])
-        + len(get_table_files(path_to_src_omop_dir, "cdm_source")[1]),
-        desc="Extracting dataset metadata",
-    ):
+    for cdm_source_file in tqdm(itertools.chain(*get_table_files(path_to_src_omop_dir, "cdm_source")),
+                                total=len(get_table_files(path_to_src_omop_dir, "cdm_source")[0]) + len(get_table_files(path_to_src_omop_dir, "cdm_source")[1]),
+                                desc="Extracting dataset metadata"):
         with load_file(path_to_decompressed_dir, cdm_source_file) as f:
             cdm_source = read_polars_df(f.name)
             cdm_source = cdm_source.rename({c: c.lower() for c in cdm_source.columns})
