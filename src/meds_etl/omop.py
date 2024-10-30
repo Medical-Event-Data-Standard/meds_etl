@@ -179,23 +179,21 @@ def write_event_data(
                 ),
             )
         else:
-            # User defined time field options
-            time_field_options = [
-                cast_to_datetime(schema, option, move_to_end_of_day=True)
-                for option in table_details.get("time_field_options", [])
-                if option in schema.names()
-            ]
             # Use the OMOP table name + `_start_datetime` as the `time` column
             # if it's available otherwise `_start_date`, `_datetime`, `_date`
             # in that order of preference
-            options = ["_start_datetime", "_start_date", "_datetime", "_date"]
-            options = [
-                cast_to_datetime(schema, table_name + option, move_to_end_of_day=True)
-                for option in options
-                if table_name + option in schema.names()
-            ]
             # We prefer user defined time field options over the default time options if available
-            options = time_field_options + options
+            options = table_details.get("time_field_options", []) + [
+                table_name + "_start_datetime",
+                table_name + "_start_date",
+                table_name + "_datetime",
+                table_name + "_date",
+            ]
+            options = [
+                cast_to_datetime(schema, option, move_to_end_of_day=True)
+                for option in options
+                if option in schema.names()
+            ]
             assert len(options) > 0, f"Could not find the time column {schema.names()}"
             time = pl.coalesce(options)
 
