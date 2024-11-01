@@ -182,11 +182,17 @@ def write_event_data(
             # Use the OMOP table name + `_start_datetime` as the `time` column
             # if it's available otherwise `_start_date`, `_datetime`, `_date`
             # in that order of preference
-            options = ["_start_datetime", "_start_date", "_datetime", "_date"]
+            # We prefer user defined time field options over the default time options if available
+            options = table_details.get("time_field_options", []) + [
+                table_name + "_start_datetime",
+                table_name + "_start_date",
+                table_name + "_datetime",
+                table_name + "_date",
+            ]
             options = [
-                cast_to_datetime(schema, table_name + option, move_to_end_of_day=True)
+                cast_to_datetime(schema, option, move_to_end_of_day=True)
                 for option in options
-                if table_name + option in schema.names()
+                if option in schema.names()
             ]
             assert len(options) > 0, f"Could not find the time column {schema.names()}"
             time = pl.coalesce(options)
@@ -450,8 +456,8 @@ def extract_metadata(path_to_src_omop_dir: str, path_to_decompressed_dir: str, v
     # and use it to generate metadata file as well as populate maps
     # from (concept ID -> concept code) and (concept ID -> concept name)
     print("Generating metadata from OMOP `concept` table")
-    for concept_file in tqdm(itertools.chain(*get_table_files(path_to_src_omop_dir, "concept")), 
-                             total=len(get_table_files(path_to_src_omop_dir, "concept")[0]) + len(get_table_files(path_to_src_omop_dir, "concept")[1]), 
+    for concept_file in tqdm(itertools.chain(*get_table_files(path_to_src_omop_dir, "concept")),
+                             total=len(get_table_files(path_to_src_omop_dir, "concept")[0]) + len(get_table_files(path_to_src_omop_dir, "concept")[1]),
                              desc="Generating metadata from OMOP `concept` table"):
         # Note: Concept table is often split into gzipped shards by default
         if verbose:
@@ -492,8 +498,8 @@ def extract_metadata(path_to_src_omop_dir: str, path_to_decompressed_dir: str, v
 
     # Include map from custom concepts to normalized (ie standard ontology)
     # parent concepts, where possible, in the code_metadata dictionary
-    for concept_relationship_file in tqdm(itertools.chain(*get_table_files(path_to_src_omop_dir, "concept_relationship")), 
-                                                          total=len(get_table_files(path_to_src_omop_dir, "concept_relationship")[0]) + len(get_table_files(path_to_src_omop_dir, "concept_relationship")[1]), 
+    for concept_relationship_file in tqdm(itertools.chain(*get_table_files(path_to_src_omop_dir, "concept_relationship")),
+                                                          total=len(get_table_files(path_to_src_omop_dir, "concept_relationship")[0]) + len(get_table_files(path_to_src_omop_dir, "concept_relationship")[1]),
                                                           desc="Generating metadata from OMOP `concept_relationship` table"):
         with load_file(path_to_decompressed_dir, concept_relationship_file) as f:
             # This table has `concept_id_1`, `concept_id_2`, `relationship_id` columns
@@ -668,7 +674,14 @@ def main():
             "drug_exposure": {
                 "concept_id_field": "drug_concept_id",
             },
-            "visit": {"fallback_concept_id": DEFAULT_VISIT_CONCEPT_ID, "file_suffix": "occurrence"},
+            "visit": [
+                {"fallback_concept_id": DEFAULT_VISIT_CONCEPT_ID, "file_suffix": "occurrence"},
+                {
+                    "concept_id_field": "discharged_to_concept_id",
+                    "time_field_options": ["visit_end_datetime", "visit_end_date"],
+                    "file_suffix": "occurrence",
+                },
+            ],
             "condition": {
                 "file_suffix": "occurrence",
             },
