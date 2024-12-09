@@ -327,7 +327,7 @@ def write_event_data(
         # Write this part of the MEDS Unsorted file to disk
         fname = os.path.join(path_to_MEDS_unsorted_dir, f'{table_name.replace("/", "_")}_{uuid.uuid4()}.parquet')
         try:
-            event_data.sink_parquet(fname, compression="zstd", compression_level=1, maintain_order=False)
+            event_data.collect().write_parquet(fname, compression="zstd", compression_level=1)
         except pl.exceptions.InvalidOperationError as e:
             print(table_name)
             print(e)
