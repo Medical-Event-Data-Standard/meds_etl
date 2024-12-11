@@ -285,7 +285,7 @@ def write_event_data(
         }
 
         if "visit_occurrence_id" in schema.names():
-            metadata["visit_id"] = pl.col("visit_occurrence_id")
+            metadata["visit_id"] = pl.col("visit_occurrence_id").cast(pl.Int64)
 
         unit_columns = []
         if "unit_source_value" in schema.names():
@@ -570,7 +570,7 @@ def main():
     parser.add_argument(
         "--num_shards",
         type=int,
-        default=100,
+        default=1,
         help="Number of shards to use for converting MEDS from the unsorted format "
         "to MEDS (subjects are distributed approximately uniformly at "
         "random across shards and collation/joining of OMOP tables is "
