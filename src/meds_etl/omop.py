@@ -218,10 +218,11 @@ def write_event_data(
             # And if the source concept ID and concept ID aren't available, use `fallback_concept_id`
             fallback_concept_id = pl.lit(table_details.get("fallback_concept_id", None), dtype=pl.Int64)
 
+            # Note: we currently use the converted concepts as we want to increase cross-dataset compatibility
             concept_id = (
-                pl.when(source_concept_id != 0)
-                .then(source_concept_id)
-                .when(concept_id != 0)
+                # pl.when(source_concept_id != 0)
+                # .then(source_concept_id)
+                pl.when(concept_id != 0)
                 .then(concept_id)
                 .otherwise(fallback_concept_id)
             )
