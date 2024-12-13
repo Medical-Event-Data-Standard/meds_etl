@@ -570,7 +570,7 @@ def main():
     parser.add_argument(
         "--num_shards",
         type=int,
-        default=1,
+        default=100,
         help="Number of shards to use for converting MEDS from the unsorted format "
         "to MEDS (subjects are distributed approximately uniformly at "
         "random across shards and collation/joining of OMOP tables is "
