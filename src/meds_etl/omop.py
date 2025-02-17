@@ -591,6 +591,7 @@ def main():
         help="If set, the job continues from a previous run, starting after the "
         "conversion to MEDS Unsorted but before converting from MEDS Unsorted to MEDS.",
     )
+    parser.add_argument("--force_refresh", action="store_true", help="If set, this will overwrite all previous MEDS data in the output dir.")
 
     args = parser.parse_args()
 
@@ -598,6 +599,11 @@ def main():
         raise ValueError(f'The source OMOP folder ("{args.path_to_src_omop_dir}") does not seem to exist?')
 
     # Create the directory where final MEDS files will go, if doesn't already exist
+    if args.force_refresh:
+        if os.path.exists(args.path_to_dest_meds_dir):
+            if args.verbose:
+                print(f"Deleting and recreating {args.path_to_dest_meds_dir}")
+            shutil.rmtree(args.path_to_dest_meds_dir)
     os.makedirs(args.path_to_dest_meds_dir, exist_ok=True)
 
     # Within the target directory, create temporary subfolder for holding files
