@@ -117,6 +117,8 @@ def load_file(path_to_decompressed_dir: str, fname: str) -> Any:
 
 
 def cast_to_datetime(schema: Any, column: str, move_to_end_of_day: bool = False):
+    if column not in schema.names():
+        return pl.lit(None, dtype=pl.Datetime(time_unit="us"))
     if schema[column] == pl.Utf8():
         if not move_to_end_of_day:
             return meds_etl.utils.parse_time(pl.col(column), OMOP_TIME_FORMATS)
