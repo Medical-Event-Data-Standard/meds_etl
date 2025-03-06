@@ -31,7 +31,7 @@ Backend information:
 
 - cpp: A custom C++ backend. This backend is very efficient, but might not run on all platforms and has a limited feature set. It's recommended to use the same number of shards as you have CPUs available.
 
-If you want to use either the cpp backend, make sure to install meds_etl with the correct optional dependencies.
+If you want to use the cpp backend, make sure to install meds_etl with the correct optional dependencies.
 
 ```bash
 # For the cpp backend
