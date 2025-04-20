@@ -490,6 +490,9 @@ def main():
                 code=mapping_info["code"], descr=mapping_info["descr"], parent=mapping_info["parent"]
             )
             for code, descr, value in code_and_value.iter_rows():
+                if code is None:
+                    continue
+                    
                 if code in code_metadata:
                     assert (
                         value == code_metadata[code].get("parent_codes", [None])[0]
@@ -504,7 +507,7 @@ def main():
 
                 code_metadata[code] = result
 
-    code_metadata_table = pa.Table.from_pylist(code_metadata.values(), meds.code_metadata_schema())
+    code_metadata_table = meds.CodeMetadata.align(pa.Table.from_pylist(list(code_metadata.values())))
     pq.write_table(code_metadata_table, os.path.join(args.destination, "metadata", "codes.parquet"))
 
     metadata = {
@@ -515,7 +518,7 @@ def main():
         "meds_version": meds.__version__,
     }
 
-    jsonschema.validate(instance=metadata, schema=meds.dataset_metadata_schema)
+    meds.DatasetMetadata.validate(metadata)
 
     with open(os.path.join(args.destination, "metadata", "dataset.json"), "w") as f:
         json.dump(metadata, f)

@@ -86,9 +86,8 @@ def create_dataset(tmp_path: pathlib.Path, include_properties=True):
         ]
 
     subjects = create_example_subjects(include_properties=include_properties)
-    subject_schema = meds.data_schema(properties_schema)
 
-    subject_table = pa.Table.from_pylist(subjects, subject_schema)
+    subject_table = meds.Data.align(pa.Table.from_pylist(subjects))
 
     pq.write_table(subject_table, tmp_path / "data" / "subjects.parquet")
 
@@ -99,14 +98,14 @@ def create_dataset(tmp_path: pathlib.Path, include_properties=True):
         "etl_version": "1",
     }
 
-    jsonschema.validate(instance=metadata, schema=meds.dataset_metadata_schema)
+    meds.DatasetMetadata.validate(metadata)
 
     (tmp_path / "metadata").mkdir()
 
     with open(tmp_path / "metadata" / "dataset.json", "w") as f:
         json.dump(metadata, f)
 
-    return subjects, subject_schema
+    return subjects, subject_table.schema
 
 
 def roundtrip_helper(tmp_path: pathlib.Path, subjects: List[meds.subject], num_proc: int):
@@ -207,6 +206,9 @@ def test_shuffle_polars(tmp_path: pathlib.Path):
 
 
 def test_shuffle_cpp(tmp_path: pathlib.Path):
+    if meds_etl_cpp is None:
+        return
+
     meds_dataset = tmp_path / "meds"
     create_dataset(meds_dataset)
 

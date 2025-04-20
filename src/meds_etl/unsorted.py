@@ -20,7 +20,7 @@ if mp is None:
     # Could not get forkserver, just use the default
     mp = multiprocessing.get_context()
 
-KNOWN_COLUMNS = {"subject_id", "numeric_value", "time", "code"}
+KNOWN_COLUMNS = {"subject_id", "time", "code"}
 
 
 def get_columns(event_file: str) -> Mapping[str, pl.DataType]:
@@ -105,14 +105,11 @@ def create_and_write_shards_from_table(
     # Codes should be UTF-8 strings
     code = pl.col("code").cast(pl.Utf8())
 
-    numeric_value = pl.col("numeric_value").cast(pl.Utf8())
-
     columns = (
         [
             ("subject_id", subject_id),
             ("time", time),
             ("code", code),
-            ("numeric_value", numeric_value),
         ]
         + get_property_columns(table, property_columns)
         + [("shard", subject_id.hash(213345) % num_shards)]
@@ -244,16 +241,7 @@ def sort_polars(
         # Save and load our data in order to convert to pyarrow library
         converted = sorted_events.to_arrow()
 
-        fields = []
-
-        # Now we need to reconstruct the schema
-        for i, name in enumerate(converted.schema.names):
-            if name not in KNOWN_COLUMNS:
-                fields.append((name, converted.schema.field(i).type))
-        desired_schema = meds.data_schema(fields)
-
-        # All the large_lists are now converted to lists
-        casted = converted.cast(desired_schema)
+        casted = meds.Data.align(converted)
 
         pq.write_table(casted, os.path.join(data_dir, f"data_{shard_index}.parquet"))
 
