@@ -89,8 +89,25 @@ def get_table_files(path_to_src_omop_dir: str, table_name: str, table_details={}
 def read_polars_df(fname: str) -> pl.DataFrame:
     """Read a file that might be a CSV or Parquet file"""
     if fname.endswith(".csv"):
-        # Don't try to infer schema because it can cause errors with columns that look like ints but aren't
-        return pl.read_csv(fname, infer_schema=False)
+        first_line: str = open(fname).readline()
+        is_tab_delimited: bool = first_line.count("\t") > first_line.count(",")
+        if not is_tab_delimited:
+            # Don't try to infer schema because it can cause errors with columns that look like ints but aren't
+            return pl.read_csv(fname, infer_schema=False)
+        else:
+            # NOTE: Some Athena / OMOP .csv files are tab delimited :(
+            # Thus, we need to read them with tab delimiters and ignore errors
+            print(f"Auto-detected that the CSV file {fname} is tab delimited.")
+            df = pl.read_csv(fname,
+                infer_schema=False,
+                separator="\t",
+                ignore_errors=True,
+                truncate_ragged_lines=True,
+                quote_char=None,
+            )
+            n_rows: int = sum(1 for line in open(fname))
+            print(f"Successfully read {len(df)} out of {n_rows} rows in CSV")
+            return df
     elif fname.endswith(".parquet"):
         return pl.read_parquet(fname)
     else:
@@ -463,7 +480,7 @@ def extract_metadata(path_to_src_omop_dir: str, path_to_decompressed_dir: str, v
                              desc="Generating metadata from OMOP `concept` table"):
         # Note: Concept table is often split into gzipped shards by default
         if verbose:
-            print(concept_file)
+            print("Found concept file: ", concept_file)
         with load_file(path_to_decompressed_dir, concept_file) as f:
             # Read the contents of the `concept` table shard
             # `load_file` will unzip the file into `path_to_decompressed_dir` if needed
@@ -503,6 +520,8 @@ def extract_metadata(path_to_src_omop_dir: str, path_to_decompressed_dir: str, v
     for concept_relationship_file in tqdm(itertools.chain(*get_table_files(path_to_src_omop_dir, "concept_relationship")),
                                                           total=len(get_table_files(path_to_src_omop_dir, "concept_relationship")[0]) + len(get_table_files(path_to_src_omop_dir, "concept_relationship")[1]),
                                                           desc="Generating metadata from OMOP `concept_relationship` table"):
+        if verbose:
+            print("Found concept relationship file: ", concept_relationship_file)
         with load_file(path_to_decompressed_dir, concept_relationship_file) as f:
             # This table has `concept_id_1`, `concept_id_2`, `relationship_id` columns
             concept_relationship = read_polars_df(f.name)
@@ -532,6 +551,8 @@ def extract_metadata(path_to_src_omop_dir: str, path_to_decompressed_dir: str, v
     for cdm_source_file in tqdm(itertools.chain(*get_table_files(path_to_src_omop_dir, "cdm_source")),
                                 total=len(get_table_files(path_to_src_omop_dir, "cdm_source")[0]) + len(get_table_files(path_to_src_omop_dir, "cdm_source")[1]),
                                 desc="Extracting dataset metadata"):
+        if verbose:
+            print("Found cdm_source file: ", cdm_source_file)
         with load_file(path_to_decompressed_dir, cdm_source_file) as f:
             cdm_source = read_polars_df(f.name)
             cdm_source = cdm_source.rename({c: c.lower() for c in cdm_source.columns})
@@ -539,6 +560,14 @@ def extract_metadata(path_to_src_omop_dir: str, path_to_decompressed_dir: str, v
 
             datasets.extend(cdm_source["cdm_source_name"])
             dataset_versions.extend(cdm_source["cdm_release_date"])
+    
+    if verbose:
+        print("# of codes in code_metadata: ", len(code_metadata))
+        print("# of codes in concept_id_map: ", len(concept_id_map))
+        print("# of codes in concept_name_map: ", len(concept_name_map))
+
+    if len(concept_id_map) + len(code_metadata) == 0:
+        print("WARNING: No codes were found. This will result in patients having timelines with only one event (MEDS_BIRTH). Please make sure that a CONCEPT.csv file was passed.")
 
     metadata = {
         "dataset_name": "|".join(datasets),  # eg 'Epic Clarity SHC|Epic Clarity LPCH'
@@ -547,7 +576,7 @@ def extract_metadata(path_to_src_omop_dir: str, path_to_decompressed_dir: str, v
         "etl_version": meds_etl.__version__,
         "meds_version": meds.__version__,
     }
-    # At this point metadata['code_metadata']['STANFORD_MEAS/AMOXICILLIN/CLAVULANATE']
+    # At this point code_metadata['STANFORD_MEAS/AMOXICILLIN/CLAVULANATE']
     # should give a dictionary like
     # {'description': 'AMOXICILLIN/CLAVULANATE', 'parent_codes': ['LOINC/18862-3']}
     # where LOINC Code '18862-3' is a standard concept representing a lab test
@@ -585,7 +614,7 @@ def main():
         default="polars",
         help="The backend to use when converting from MEDS Unsorted to MEDS in the ETL. See the README for a discussion on possible backends.",
     )
-    parser.add_argument("--verbose", type=int, default=0)
+    parser.add_argument("--verbose", default=False, action="store_true")
     parser.add_argument(
         "--continue_job",
         dest="continue_job",
@@ -598,7 +627,13 @@ def main():
     args = parser.parse_args()
 
     if not os.path.exists(args.path_to_src_omop_dir):
-        raise ValueError(f'The source OMOP folder ("{args.path_to_src_omop_dir}") does not seem to exist?')
+        raise ValueError(f'The source OMOP folder -- `{args.path_to_src_omop_dir}` -- does not exist')
+
+    # Change all file names in path_to_src_omop_dir to lowercase (otherwise the ETL will not find files named 'CONCEPT.csv' or 'Concept.csv' etc.)
+    # Don't remove this code! (otherwise the ETL will fail in mysterious ways for end users)
+    for root, dirs, files in os.walk(args.path_to_src_omop_dir):
+        for file in files:
+            os.rename(os.path.join(root, file), os.path.join(root, file.lower()))
 
     # Create the directory where final MEDS files will go, if doesn't already exist
     if args.force_refresh:
