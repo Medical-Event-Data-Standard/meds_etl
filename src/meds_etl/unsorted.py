@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import pyarrow as pa
 import argparse
 import functools
 import glob
@@ -51,8 +52,23 @@ def get_columns(event_file: str) -> Mapping[str, pl.DataType]:
         Calling `get_parquet_columns('subject_data.parquet')` would return:
             {'subject_id': 'int64', 'name': 'string', 'visit_date': 'date32'}
     """
-    schema = pl.scan_parquet(event_file).collect_schema()
-    return dict(schema)
+     # open with higher Thrift limits so large-metadata files won’t fail
+    pq_file = pq.ParquetFile(
+        event_file,
+        thrift_string_size_limit=1_000_000_000, # ! NOTE: This is needed for large metadata files (e.g. Truven-scale OMOP datasets)
+        thrift_container_size_limit=1_000_000_000
+    )
+    pa_schema: pa.Schema = pq_file.schema_arrow
+
+    # 2) Build an empty Arrow Table using that schema
+    #    (no row data, just empty batches + our schema)
+    pa_empty = pa.Table.from_batches([], schema=pa_schema)
+
+    # 3) Convert the empty Arrow table into a Polars DataFrame
+    pl_df = pl.DataFrame(pa_empty)
+    
+    # 4) pl_df.schema is already { column_name: pl.DataType, ... }
+    return pl_df.schema
 
 
 def get_property_columns(table, properties_columns):
@@ -90,6 +106,7 @@ def verify_shard(shard, event_file, important_columns=("subject_id", "code")):
 def create_and_write_shards_from_table(
     table, temp_dir: str, num_shards: int, property_columns: List[Tuple[str, pl.DataType]], filename: str
 ):
+    
     # Convert all the column names to lower case
     table = table.rename({c: c.lower() for c in table.collect_schema().names()})
 
@@ -119,26 +136,39 @@ def create_and_write_shards_from_table(
     )
 
     exprs = [b.alias(a) for a, b in columns]
+    
+    # 3) Build one big LazyFrame:
+    print(f"Building lazy query to partition `{filename}` into {num_shards} shards...")
+    lazy_all = table.select(*exprs)  # still lazy; no collect yet
 
-    # Actually execute the typecast conversion, partition table into
-    # shards based on hashed subject ID
-    event_data = table.select(*exprs).collect().partition_by(["shard"], as_dict=True, maintain_order=False)
+    # 4) For each shard_index, filter that lazy plan, collect streaming, then write.
+    for shard_index in range(num_shards):
 
-    # Validate/verify each shard's important columns and write to disk
-    for (shard_index,), shard in event_data.items():
-        verify_shard(shard, filename)
+        # Filter to get only rows that belong in this shard. Still lazy.
+        shard_lazy = lazy_all.filter(pl.col("shard") == shard_index)
+
+        # Collect in streaming mode so only this shard’s rows go into memory:
+        shard_df = shard_lazy.collect()
+
+        # (Optional) verify the shard's important columns before writing:
+        verify_shard(shard_df, filename)
+
+        # Write this shard out to disk: temp_dir/<shard_index>/<filename>.parquet
         fname = os.path.join(temp_dir, str(shard_index), filename)
-        shard.write_parquet(fname, compression="uncompressed")
-
+        shard_df.write_parquet(fname, compression="uncompressed")
 
 def process_file(event_file: str, *, temp_dir: str, num_shards: int, property_columns: List[Tuple[str, pl.DataType]]):
     """Partition MEDS Unsorted files into shards based on subject ID and write to disk"""
-    logging.info("Working on ", event_file)
+    print(f"Working on: {event_file}")
 
     table = pl.scan_parquet(event_file)
+    
+    print(f"Scanned: {event_file}")
 
     cleaned_event_file = os.path.basename(event_file).split(".")[0]
     fname = f"{cleaned_event_file}.parquet"
+    print(f"Clean file name: {fname}")
+    
     create_and_write_shards_from_table(table, temp_dir, num_shards, property_columns, fname)
 
 
@@ -154,19 +184,23 @@ def sort_polars(
 
     os.makedirs(target_meds_path, exist_ok=True)
 
+    print(f"Reading {source_unsorted_path}...")
+
     events = []
 
     decompressed_dir = os.path.join(target_meds_path, "decompressed")
-    os.mkdir(decompressed_dir)
+    os.makedirs(decompressed_dir, exist_ok=True)
 
     temp_dir = os.path.join(target_meds_path, "temp")
-    os.mkdir(temp_dir)
+    os.makedirs(temp_dir, exist_ok=True)
 
     # Make a folder called `{shard_index}` for each `shard_index` within `temp_dir`
     for shard_index in range(num_shards):
-        os.mkdir(os.path.join(temp_dir, str(shard_index)))
+        os.makedirs(os.path.join(temp_dir, str(shard_index)), exist_ok=True)
 
-    shutil.copytree(os.path.join(source_unsorted_path, "metadata"), os.path.join(target_meds_path, "metadata"))
+    shutil.copytree(os.path.join(source_unsorted_path, "metadata"), 
+                    os.path.join(target_meds_path, "metadata"),
+                    dirs_exist_ok=True)
 
     tasks = list(glob.glob(os.path.join(source_unsorted_path, "unsorted_data", "*")))
 
@@ -217,15 +251,15 @@ def sort_polars(
 
     shutil.rmtree(decompressed_dir)
 
-    logging.info("Processing each shard")
+    print("Processing each shard")
 
     data_dir = os.path.join(target_meds_path, "data")
-    os.mkdir(data_dir)
+    os.makedirs(data_dir, exist_ok=True)
 
     print("Collating source table data, shard by shard, to create subject timelines...")
     print("(Gathering events into timelines)")
     for shard_index in tqdm(range(num_shards), total=num_shards):
-        logging.info("Processing shard ", shard_index)
+        print("Processing shard ", shard_index)
         shard_dir = os.path.join(temp_dir, str(shard_index))
 
         if len(os.listdir(shard_dir)) == 0:
