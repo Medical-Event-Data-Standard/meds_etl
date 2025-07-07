@@ -20,7 +20,7 @@ dependencies = [
 
 [project.optional-dependencies]
 cpp = [
-    "meds_etl_cpp == 0.3.3",
+    "meds_etl_cpp == 0.3.4",
 ]
 
 
