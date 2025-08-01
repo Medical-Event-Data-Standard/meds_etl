@@ -5,7 +5,7 @@ A collection of ETLs from common data formats to Medical Event Data Standard (ME
 This package library currently supports:
 
 - MIMIC-IV
-- OMOP v5.4
+- OMOP v5.4/5.3 (this fork)
 - MEDS Unsorted, an unsorted version of MEDS
 
 ## Setup
