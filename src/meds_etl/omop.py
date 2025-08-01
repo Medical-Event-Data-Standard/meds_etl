@@ -220,12 +220,11 @@ def write_event_data(
             # And if the source concept ID and concept ID aren't available, use `fallback_concept_id`
             fallback_concept_id = pl.lit(table_details.get("fallback_concept_id", None), dtype=pl.Int64)
 
-            # Note: we currently use the converted concepts as we want to increase cross-dataset compatibility
             concept_id = (
-                pl.when(concept_id != 0)
-                .then(concept_id)
-                .when(source_concept_id != 0)
+                pl.when(source_concept_id != 0)
                 .then(source_concept_id)
+                .when(concept_id != 0)
+                .then(concept_id)
                 .otherwise(fallback_concept_id)
             )
 
@@ -288,7 +287,7 @@ def write_event_data(
         }
 
         if "visit_occurrence_id" in schema.names():
-            metadata["visit_id"] = pl.col("visit_occurrence_id").cast(pl.Int64)
+            metadata["visit_id"] = pl.col("visit_occurrence_id")
 
         unit_columns = []
         if "unit_source_value" in schema.names():
@@ -686,7 +685,7 @@ def main():
             "visit": [
                 {"fallback_concept_id": DEFAULT_VISIT_CONCEPT_ID, "file_suffix": "occurrence"},
                 {
-                    "concept_id_field": "discharge_to_concept_id",
+                    "concept_id_field": "discharged_to_concept_id",
                     "time_field_options": ["visit_end_datetime", "visit_end_date"],
                     "file_suffix": "occurrence",
                 },
