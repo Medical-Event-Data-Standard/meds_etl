@@ -88,7 +88,7 @@ In order to convert a MEDS Unsorted dataset into MEDS, simply run the following 
 
 `meds_etl_sort meds_unsorted meds` where meds_unsorted is a folder containing MEDS Unsorted data and `meds` is the target folder to store the MEDS dataset in.
 ## Arguments
-Here is a Markdown documentation table for the command-line arguments:
+The following command-line arguments available for the `meds_etl_omop` command:
 
 | Argument                  | Type    | Default   | Description                                                                                                                                                                                                                  |
 |---------------------------|---------|-----------|------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
@@ -101,6 +101,17 @@ Here is a Markdown documentation table for the command-line arguments:
 | `--continue_job`          | flag    | False     | If set, the job continues from a previous run, starting after the conversion to MEDS Unsorted but before converting from MEDS Unsorted to MEDS.                                                                              |
 | `--force_refresh`         | flag    | False     | If set, this will overwrite all previous MEDS data in the output dir.                                                                                                                                                        |
 | `--omop_version`          | str     | 5.4       | Switch between OMOP 5.3/5.4, default 5.4.                                                                                                                                                                                    |
+
+The following command-line arguments available for the `meds_etl_mimic` command:
+Here is a Markdown table documenting these arguments:
+
+| Argument         | Type   | Default  | Description                                              |
+|------------------|--------|----------|----------------------------------------------------------|
+| `src_mimic`      | str    | —        | Path to the source MIMIC\_IV directory                   |
+| `destination`    | str    | —        | Path to the output MEDS directory                        |
+| `--num_shards`   | int    | 100      | Number of shards for processing                          |
+| `--num_proc`     | int    | 1        | Number of processes (vCPUs) to use                       |
+| `--backend`               | str     | polars    | The backend to use when converting from MEDS Unsorted to MEDS in the ETL. See the README for a discussion on possible backends.                                                                                              |
 ## Troubleshooting
 
 **Polars incompatible with Mac M1**
