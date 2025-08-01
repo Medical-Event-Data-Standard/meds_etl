@@ -117,6 +117,8 @@ def load_file(path_to_decompressed_dir: str, fname: str) -> Any:
 
 
 def cast_to_datetime(schema: Any, column: str, move_to_end_of_day: bool = False):
+    if column not in schema.names():
+        return pl.lit(None, dtype=pl.Datetime(time_unit="us"))
     if schema[column] == pl.Utf8():
         if not move_to_end_of_day:
             return meds_etl.utils.parse_time(pl.col(column), OMOP_TIME_FORMATS)
@@ -218,12 +220,11 @@ def write_event_data(
             # And if the source concept ID and concept ID aren't available, use `fallback_concept_id`
             fallback_concept_id = pl.lit(table_details.get("fallback_concept_id", None), dtype=pl.Int64)
 
-            # Note: we currently use the converted concepts as we want to increase cross-dataset compatibility
             concept_id = (
-                pl.when(concept_id != 0)
-                .then(concept_id)
-                .when(source_concept_id != 0)
+                pl.when(source_concept_id != 0)
                 .then(source_concept_id)
+                .when(concept_id != 0)
+                .then(concept_id)
                 .otherwise(fallback_concept_id)
             )
 
@@ -286,7 +287,7 @@ def write_event_data(
         }
 
         if "visit_occurrence_id" in schema.names():
-            metadata["visit_id"] = pl.col("visit_occurrence_id").cast(pl.Int64)
+            metadata["visit_id"] = pl.col("visit_occurrence_id")
 
         unit_columns = []
         if "unit_source_value" in schema.names():
@@ -328,7 +329,7 @@ def write_event_data(
         # Write this part of the MEDS Unsorted file to disk
         fname = os.path.join(path_to_MEDS_unsorted_dir, f'{table_name.replace("/", "_")}_{uuid.uuid4()}.parquet')
         try:
-            event_data.collect().write_parquet(fname, compression="zstd", compression_level=1)
+            event_data.collect(streaming=True).write_parquet(fname, compression="zstd", compression_level=1)
         except pl.exceptions.InvalidOperationError as e:
             print(table_name)
             print(e)
@@ -592,6 +593,7 @@ def main():
         help="If set, the job continues from a previous run, starting after the "
         "conversion to MEDS Unsorted but before converting from MEDS Unsorted to MEDS.",
     )
+    parser.add_argument("--force_refresh", action="store_true", help="If set, this will overwrite all previous MEDS data in the output dir.")
 
     args = parser.parse_args()
 
@@ -599,6 +601,11 @@ def main():
         raise ValueError(f'The source OMOP folder ("{args.path_to_src_omop_dir}") does not seem to exist?')
 
     # Create the directory where final MEDS files will go, if doesn't already exist
+    if args.force_refresh:
+        if os.path.exists(args.path_to_dest_meds_dir):
+            if args.verbose:
+                print(f"Deleting and recreating {args.path_to_dest_meds_dir}")
+            shutil.rmtree(args.path_to_dest_meds_dir)
     os.makedirs(args.path_to_dest_meds_dir, exist_ok=True)
 
     # Within the target directory, create temporary subfolder for holding files
@@ -678,7 +685,7 @@ def main():
             "visit": [
                 {"fallback_concept_id": DEFAULT_VISIT_CONCEPT_ID, "file_suffix": "occurrence"},
                 {
-                    "concept_id_field": "discharge_to_concept_id",
+                    "concept_id_field": "discharged_to_concept_id",
                     "time_field_options": ["visit_end_datetime", "visit_end_date"],
                     "file_suffix": "occurrence",
                 },

@@ -5,7 +5,7 @@ A collection of ETLs from common data formats to Medical Event Data Standard (ME
 This package library currently supports:
 
 - MIMIC-IV
-- OMOP v5
+- OMOP v5.4
 - MEDS Unsorted, an unsorted version of MEDS
 
 ## Setup
@@ -31,7 +31,7 @@ Backend information:
 
 - cpp: A custom C++ backend. This backend is very efficient, but might not run on all platforms and has a limited feature set. It's recommended to use the same number of shards as you have CPUs available.
 
-If you want to use either the cpp backend, make sure to install meds_etl with the correct optional dependencies.
+If you want to use the cpp backend, make sure to install meds_etl with the correct optional dependencies.
 
 ```bash
 # For the cpp backend
@@ -79,7 +79,7 @@ wget -r -N -c --no-host-directories --cut-dirs=1 -np -P tests/data https://physi
 
 MEDS itself can be a bit tricky to generate as it has ordering and shard location requirements for events (events for a particular subject must be sorted by time and can only be in one shard).
 
-In order to make things simpler for users, this package provides a special MEDS Unsorted schema and ETLs that transform between MEDS Unsorted and MEDS.
+In order to make it easier to generate MEDS, this package provides a special MEDS Unsorted schema and ETLs that transform between MEDS Unsorted and MEDS. The idea is that instead of writing a complex MEDS ETL, users can instead write a simpler ETL to MEDS Unsorted and then use this package as a final stage.
 
 MEDS Unsorted is simply MEDS without the ordering and shard requirements for events, with the name of the data folder changed from "data" to "unsorted_data".
 
