@@ -1,6 +1,6 @@
 # meds_etl
 
-A collection of ETLs from common data formats to Medical Event Data Standard (MEDS)
+A collection of ETLs from common data formats to Medical Event Data Standard (MEDS).
 
 This package library currently supports:
 
@@ -8,6 +8,7 @@ This package library currently supports:
 - OMOP v5.4/5.3 (this fork)
 - MEDS Unsorted, an unsorted version of MEDS
 
+Currently the package converts to MEDS 0.3.3.
 ## Setup
 Install the package
 
@@ -86,7 +87,20 @@ MEDS Unsorted is simply MEDS without the ordering and shard requirements for eve
 In order to convert a MEDS Unsorted dataset into MEDS, simply run the following command:
 
 `meds_etl_sort meds_unsorted meds` where meds_unsorted is a folder containing MEDS Unsorted data and `meds` is the target folder to store the MEDS dataset in.
+## Arguments
+Here is a Markdown documentation table for the command-line arguments:
 
+| Argument                  | Type    | Default   | Description                                                                                                                                                                                                                  |
+|---------------------------|---------|-----------|------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
+| `path_to_src_omop_dir`    | str     | —         | Path to the OMOP source directory, e.g. `~/Downloads/data/som-rit-phi-starr-prod.starr_omop_cdm5_confidential_2023_11_19` for STARR-OMOP full or `~/Downloads/data/som-rit-phi-starr-prod.starr_omop_cdm5_confidential_1pcent_2024_02_09`. |
+| `path_to_dest_meds_dir`   | str     | —         | Path to where the output MEDS files will be stored.                                                                                                                                                                          |
+| `--num_shards`            | int     | 100       | Number of shards to use for converting MEDS from the unsorted format to MEDS (subjects are distributed approximately uniformly at random across shards and collation/joining of OMOP tables is performed on a shard-by-shard basis). |
+| `--num_proc`              | int     | 1         | Number of vCPUs to use for performing the MEDS ETL.                                                                                                                                                                          |
+| `--backend`               | str     | polars    | The backend to use when converting from MEDS Unsorted to MEDS in the ETL. See the README for a discussion on possible backends.                                                                                              |
+| `--verbose`               | int     | 0         | Verbosity level.                                                                                                                                                                                                             |
+| `--continue_job`          | flag    | False     | If set, the job continues from a previous run, starting after the conversion to MEDS Unsorted but before converting from MEDS Unsorted to MEDS.                                                                              |
+| `--force_refresh`         | flag    | False     | If set, this will overwrite all previous MEDS data in the output dir.                                                                                                                                                        |
+| `--omop_version`          | str     | 5.4       | Switch between OMOP 5.3/5.4, default 5.4.                                                                                                                                                                                    |
 ## Troubleshooting
 
 **Polars incompatible with Mac M1**
