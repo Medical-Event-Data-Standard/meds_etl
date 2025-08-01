@@ -251,7 +251,7 @@ def sort_polars(
             if name not in KNOWN_COLUMNS:
                 fields.append((name, converted.schema.field(i).type))
         desired_schema = meds.data_schema(fields)
-
+        print("Desired schema", desired_schema)
         # All the large_lists are now converted to lists
         casted = converted.cast(desired_schema)
 
