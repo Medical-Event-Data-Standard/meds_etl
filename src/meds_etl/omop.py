@@ -594,7 +594,7 @@ def main():
         "conversion to MEDS Unsorted but before converting from MEDS Unsorted to MEDS.",
     )
     parser.add_argument("--force_refresh", action="store_true", help="If set, this will overwrite all previous MEDS data in the output dir.")
-    parser.add_argument("--omop_version", type=string, help="Switch between OMOP 5.3/5.4, default 5.4.")
+    parser.add_argument("--omop_version", type=str, help="Switch between OMOP 5.3/5.4, default 5.4.")
     args = parser.parse_args()
 
     if not os.path.exists(args.path_to_src_omop_dir):
@@ -612,8 +612,8 @@ def main():
         omop_version = "5.4"
     else:
         omop_version = args.omop_version
-    if omop_version is not in ["5.4", "5.3"]
-        raise RuntimeError f"OMOP version {omop_version} not supported"
+    if omop_version not in ["5.4", "5.3"]:
+        raise RuntimeError(f"OMOP version {omop_version} not supported")
     # Within the target directory, create temporary subfolder for holding files
     # that need to be decompressed as part of the ETL (via eg `load_file`)
     path_to_decompressed_dir = os.path.join(args.path_to_dest_meds_dir, "decompressed")
