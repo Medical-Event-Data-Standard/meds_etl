@@ -1,11 +1,15 @@
 # meds_etl
+[![PyPI - Version](https://img.shields.io/pypi/v/meds_etl)](https://pypi.org/project/meds_etl/)
+[![tests](https://github.com/Medical-Event-Data-Standard/meds_etl/actions/workflows/python-test.yml/badge.svg)](https://github.com/actions/workflows/python-test.yml)
+![python](https://img.shields.io/badge/-Python_3.10-blue?logo=python&logoColor=white)
+![Static Badge](https://img.shields.io/badge/MEDS-0.3.3-blue)
 
 A collection of ETLs from common data formats to Medical Event Data Standard (MEDS).
 
 This package library currently supports:
 
 - MIMIC-IV
-- OMOP v5.4/5.3 (this fork)
+- OMOP v5.4/5.3
 - MEDS Unsorted, an unsorted version of MEDS
 
 Currently the package converts to MEDS 0.3.3.
@@ -59,6 +63,8 @@ meds_etl_omop [PATH_TO_SOURCE_OMOP] [PATH_TO_OUTPUT]
 
 where `[PATH_TO_SOURCE_OMOP]` is a folder containing csv files (optionally gzipped) for an OMOP dataset and `[PATH_TO_OUTPUT]` will be the destination path for the MEDS dataset. Each OMOP table should either be a csv file with the table name (such as person.csv) or a folder with the table name containing csv files.
 
+This ETL currently operates on the tables: 
+`person, drug_exposure, visit, condition, death, procedure, device_exposure, measurement, observation, note, visit_detail`
 ## Unit tests
 
 Tests can be run from the project root with the following command:
@@ -103,8 +109,6 @@ The following command-line arguments available for the `meds_etl_omop` command:
 | `--omop_version`          | str     | 5.4       | Switch between OMOP 5.3/5.4, default 5.4.                                                                                                                                                                                    |
 
 The following command-line arguments available for the `meds_etl_mimic` command:
-Here is a Markdown table documenting these arguments:
-
 | Argument         | Type   | Default  | Description                                              |
 |------------------|--------|----------|----------------------------------------------------------|
 | `src_mimic`      | str    | —        | Path to the source MIMIC\_IV directory                   |
