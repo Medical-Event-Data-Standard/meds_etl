@@ -1,13 +1,18 @@
 # meds_etl
+[![PyPI - Version](https://img.shields.io/pypi/v/meds_etl)](https://pypi.org/project/meds_etl/)
+[![tests](https://github.com/Medical-Event-Data-Standard/meds_etl/actions/workflows/python-test.yml/badge.svg)](https://github.com/actions/workflows/python-test.yml)
+![python](https://img.shields.io/badge/-Python_3.10-blue?logo=python&logoColor=white)
+![Static Badge](https://img.shields.io/badge/MEDS-0.3.3-blue)
 
-A collection of ETLs from common data formats to Medical Event Data Standard (MEDS)
+A collection of ETLs from common data formats to Medical Event Data Standard (MEDS).
 
 This package library currently supports:
 
 - MIMIC-IV
-- OMOP v5.4
+- OMOP v5.4/5.3
 - MEDS Unsorted, an unsorted version of MEDS
 
+Currently the package converts to MEDS 0.3.3.
 ## Setup
 Install the package
 
@@ -58,6 +63,8 @@ meds_etl_omop [PATH_TO_SOURCE_OMOP] [PATH_TO_OUTPUT]
 
 where `[PATH_TO_SOURCE_OMOP]` is a folder containing csv files (optionally gzipped) for an OMOP dataset and `[PATH_TO_OUTPUT]` will be the destination path for the MEDS dataset. Each OMOP table should either be a csv file with the table name (such as person.csv) or a folder with the table name containing csv files.
 
+This ETL currently operates on the tables: 
+`person, drug_exposure, visit, condition, death, procedure, device_exposure, measurement, observation, note, visit_detail`
 ## Unit tests
 
 Tests can be run from the project root with the following command:
@@ -86,7 +93,29 @@ MEDS Unsorted is simply MEDS without the ordering and shard requirements for eve
 In order to convert a MEDS Unsorted dataset into MEDS, simply run the following command:
 
 `meds_etl_sort meds_unsorted meds` where meds_unsorted is a folder containing MEDS Unsorted data and `meds` is the target folder to store the MEDS dataset in.
+## Arguments
+The following command-line arguments available for the `meds_etl_omop` command:
 
+| Argument                  | Type    | Default   | Description                                                                                                                                                                                                                  |
+|---------------------------|---------|-----------|------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
+| `path_to_src_omop_dir`    | str     | —         | Path to the OMOP source directory, e.g. `~/Downloads/data/som-rit-phi-starr-prod.starr_omop_cdm5_confidential_2023_11_19` for STARR-OMOP full or `~/Downloads/data/som-rit-phi-starr-prod.starr_omop_cdm5_confidential_1pcent_2024_02_09`. |
+| `path_to_dest_meds_dir`   | str     | —         | Path to where the output MEDS files will be stored.                                                                                                                                                                          |
+| `--num_shards`            | int     | 100       | Number of shards to use for converting MEDS from the unsorted format to MEDS (subjects are distributed approximately uniformly at random across shards and collation/joining of OMOP tables is performed on a shard-by-shard basis). |
+| `--num_proc`              | int     | 1         | Number of vCPUs to use for performing the MEDS ETL.                                                                                                                                                                          |
+| `--backend`               | str     | polars    | The backend to use when converting from MEDS Unsorted to MEDS in the ETL. See the README for a discussion on possible backends.                                                                                              |
+| `--verbose`               | int     | 0         | Verbosity level.                                                                                                                                                                                                             |
+| `--continue_job`          | flag    | False     | If set, the job continues from a previous run, starting after the conversion to MEDS Unsorted but before converting from MEDS Unsorted to MEDS.                                                                              |
+| `--force_refresh`         | flag    | False     | If set, this will overwrite all previous MEDS data in the output dir.                                                                                                                                                        |
+| `--omop_version`          | str     | 5.4       | Switch between OMOP 5.3/5.4, default 5.4.                                                                                                                                                                                    |
+
+The following command-line arguments available for the `meds_etl_mimic` command:
+| Argument         | Type   | Default  | Description                                              |
+|------------------|--------|----------|----------------------------------------------------------|
+| `src_mimic`      | str    | —        | Path to the source MIMIC\_IV directory                   |
+| `destination`    | str    | —        | Path to the output MEDS directory                        |
+| `--num_shards`   | int    | 100      | Number of shards for processing                          |
+| `--num_proc`     | int    | 1        | Number of processes (vCPUs) to use                       |
+| `--backend`               | str     | polars    | The backend to use when converting from MEDS Unsorted to MEDS in the ETL. See the README for a discussion on possible backends.                                                                                              |
 ## Troubleshooting
 
 **Polars incompatible with Mac M1**
