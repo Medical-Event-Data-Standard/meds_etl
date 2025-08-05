@@ -8,7 +8,7 @@ A collection of ETLs from common data formats to Medical Event Data Standard (ME
 
 This package library currently supports:
 
-- MIMIC-IV
+- MIMIC-IV 2.2
 - OMOP v5.4/5.3
 - MEDS Unsorted, an unsorted version of MEDS
 
@@ -52,6 +52,8 @@ meds_etl_mimic [PATH_TO_SOURCE_MIMIC] [PATH_TO_OUTPUT]
 ```
 
 where `[PATH_TO_SOURCE_MIMIC]` is a download of MIMIC-IV and `[PATH_TO_OUTPUT]` will be the destination path for the MEDS dataset.
+
+Note that this code only supports MIMIC 2.2 currently, but PRs are welcome to add support for other MIMIC versions.
 
 ## OMOP
 
